@@ -1,0 +1,7 @@
+# Placeholder to ensure directory is created
+# Add your notebooks here
+*.ipynb
+
+# Except for demo notebooks you want to commit
+!*-demo.ipynb
+!*-example.ipynb

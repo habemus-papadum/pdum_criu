@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -64,6 +65,21 @@ def _spawn_goblin() -> subprocess.Popen[bytes]:
     return proc
 
 
+@contextmanager
+def _images_dir(tmp_path: Path, name: str):
+    root = tmp_path / name
+    if root.exists():
+        shutil.rmtree(root, ignore_errors=True)
+    root.mkdir()
+    cleaned = False
+    try:
+        yield root
+        cleaned = True
+    finally:
+        if cleaned:
+            shutil.rmtree(root, ignore_errors=True)
+
+
 def _terminate(proc: subprocess.Popen[bytes]) -> None:
     if proc.poll() is None:
         proc.terminate()
@@ -97,25 +113,24 @@ def test_goblin_freeze_live(tmp_path: Path) -> None:
     _require_live_prereqs()
 
     proc = _spawn_goblin()
-    images_dir = tmp_path / "goblin-live"
-
-    try:
+    with _images_dir(tmp_path, "freeze-sync") as images_dir:
         try:
-            log_path = goblins.freeze(proc.pid, images_dir, leave_running=False)
-        except RuntimeError as exc:
-            log_tail = _read_log_tail_as_root(images_dir / f"goblin-freeze.{proc.pid}.log")
-            pytest.skip(
-                "CRIU freeze failed in this environment: "
-                f"{exc}\nLog tail (sudo tail -n 20):\n{log_tail}"
-            )
+            try:
+                log_path = goblins.freeze(proc.pid, images_dir, leave_running=False)
+            except RuntimeError as exc:
+                log_tail = _read_log_tail_as_root(images_dir / f"goblin-freeze.{proc.pid}.log")
+                pytest.skip(
+                    "CRIU freeze failed in this environment: "
+                    f"{exc}\nLog tail (sudo tail -n 20):\n{log_tail}"
+                )
 
-        assert log_path.exists()
-        assert any(images_dir.iterdir()), "CRIU did not produce any image files"
+            assert log_path.exists()
+            assert any(images_dir.iterdir()), "CRIU did not produce any image files"
 
-        # Process should have been stopped by CRIU when leave_running=False.
-        proc.wait(timeout=5)
-    finally:
-        _terminate(proc)
+            # Process should have been stopped by CRIU when leave_running=False.
+            proc.wait(timeout=5)
+        finally:
+            _terminate(proc)
 def _spawn_echo_goblin() -> subprocess.Popen[bytes]:
     script = (
         "import os, sys\n"

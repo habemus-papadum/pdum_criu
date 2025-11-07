@@ -12,6 +12,7 @@ theme:
 
 nav:
   - Home: index.md
+  - Goblins Demo: goblins.ipynb
   - API: reference.md
 
 # If you'd like to specify a separate docs directory, you can do so here

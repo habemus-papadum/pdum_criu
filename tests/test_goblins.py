@@ -109,7 +109,7 @@ def test_thaw_success(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(goblins.utils, "ensure_criu_ns", lambda **_: "/usr/sbin/criu-ns")
     pipe_map = {"stdin": "pipe:[11]", "stdout": "pipe:[12]", "stderr": "pipe:[13]"}
     monkeypatch.setattr(goblins, "_pipe_ids_from_images", lambda *_: pipe_map)
-    monkeypatch.setattr(goblins, "_ensure_sudo_closefrom_supported", lambda *_: None)
+    monkeypatch.setattr(goblins.utils, "ensure_sudo_closefrom", lambda: True)
 
     called = {}
 
@@ -141,7 +141,7 @@ def test_thaw_async_success(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(goblins.utils, "ensure_criu", lambda **_: "/usr/bin/criu")
     monkeypatch.setattr(goblins.utils, "ensure_criu_ns", lambda **_: "/usr/sbin/criu-ns")
     monkeypatch.setattr(goblins.time, "time", lambda: 54321.0)
-    monkeypatch.setattr(goblins, "_ensure_sudo_closefrom_supported", lambda *_: None)
+    monkeypatch.setattr(goblins.utils, "ensure_sudo_closefrom", lambda: True)
 
     def fake_run(cmd, check, pass_fds):
         (images_dir / "goblin-thaw.54321.pid").write_text("6666")

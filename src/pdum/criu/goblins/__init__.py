@@ -254,8 +254,6 @@ def _build_thaw_context(images_dir: str | Path, *, extra_args: Iterable[str] | N
         restore_cmd = [criu_bin]
 
     command = [
-        sudo_cmd,
-        "-n",
         *restore_cmd,
         "restore",
         "-D",
@@ -270,7 +268,7 @@ def _build_thaw_context(images_dir: str | Path, *, extra_args: Iterable[str] | N
         command.extend(extra_args)
 
     return _ThawContext(
-        command=command,
+        restore_cmd=command,
         log_path=log_path,
         images_dir=images,
         pipe_ids=pipe_ids,
@@ -299,7 +297,7 @@ class _FreezeContext:
 
 @dataclass
 class _ThawContext:
-    command: list[str]
+    restore_cmd: list[str]
     log_path: Path
     images_dir: Path
     pipe_ids: dict[str, str]
@@ -574,13 +572,14 @@ def _make_inheritable(fd: int) -> None:
 
 def _run_criu_restore(context: _ThawContext, pipes: _StdioPipes) -> None:
     utils.ensure_sudo_closefrom()
-    command = list(context.command)
-    if pipes.child_stdio_fds:
-        closefrom = max(pipes.child_stdio_fds) + 1
-        command.insert(1, str(closefrom))
-        command.insert(1, "-C")
-    command += pipes.inherit_args
-    result = subprocess.run(command, check=False, pass_fds=pipes.child_stdio_fds)
+    command = [context.sudo_cmd, "-n"]
+    child_fds = pipes.child_stdio_fds
+    if child_fds:
+        closefrom = max(child_fds) + 1
+        command += ["-C", str(closefrom)]
+    command += context.restore_cmd + pipes.inherit_args
+
+    result = subprocess.run(command, check=False, pass_fds=child_fds)
     if result.returncode != 0:
         pipes.close_parent_ends()
         _handle_thaw_failure(result.returncode, context.log_path)

@@ -145,3 +145,54 @@ def test_ensure_tools_failure(monkeypatch, func_name: str, expected_snippet: str
     ensure_fn = getattr(utils, func_name)
     assert ensure_fn() is None
     assert any(expected_snippet in msg for msg in printed)
+
+
+def _configure_fake_pgrep(monkeypatch, stdout: str, returncode: int = 0) -> None:
+    def fake_ensure_pgrep(**kwargs):
+        assert kwargs == {"verbose": False, "raise_": True}
+        return "/usr/bin/pgrep"
+
+    monkeypatch.setattr(utils, "ensure_pgrep", fake_ensure_pgrep)
+    monkeypatch.setattr(
+        utils.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=returncode,
+            stdout=stdout,
+            stderr="",
+        ),
+    )
+
+
+def test_psgrep_unique(monkeypatch) -> None:
+    """psgrep should return a single PID when ensure_unique is True."""
+    _configure_fake_pgrep(monkeypatch, stdout="123\n")
+    pid = utils.psgrep("foo bar")
+    assert pid == 123
+
+
+def test_psgrep_multiple_matches_raises(monkeypatch) -> None:
+    """Multiple matches should raise when ensure_unique is True."""
+    _configure_fake_pgrep(monkeypatch, stdout="123\n456\n")
+    with pytest.raises(RuntimeError):
+        utils.psgrep("foo")
+
+
+def test_psgrep_multiple_matches_allowed(monkeypatch) -> None:
+    """Setting ensure_unique=False should return all matching PIDs."""
+    _configure_fake_pgrep(monkeypatch, stdout="123\n456\n")
+    pids = utils.psgrep("foo", ensure_unique=False)
+    assert pids == [123, 456]
+
+
+def test_psgrep_no_matches(monkeypatch) -> None:
+    """pgrep returning no matches should raise a runtime error."""
+    _configure_fake_pgrep(monkeypatch, stdout="", returncode=1)
+    with pytest.raises(RuntimeError):
+        utils.psgrep("foo")
+
+
+def test_psgrep_rejects_empty_query() -> None:
+    """Empty queries should be rejected early."""
+    with pytest.raises(ValueError):
+        utils.psgrep("")

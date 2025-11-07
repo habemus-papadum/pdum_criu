@@ -9,34 +9,25 @@
 
 Easy process freeze & thaw using [CRIU](https://criu.org/Main_Page)
 
-Notes:
-Uses non-interactive `sudo` and `criu` under the hood
-
 ## Installation
-
-Install using pip:
-
 ```bash
 pip install habemus-papadum-criu
 ```
 
-Or using uv:
+### Check System Capability
 
 ```bash
-uv pip install habemus-papadum-criu
+uvx habemus-papadum-criu doctor
 ```
+Prints a green/red summary so you can fix env.
 
-## Usage
+**Note:** Currently uses non-interactive `sudo` and `criu` under the hood
 
-```python
-from pdum import criu
 
-print(criu.__version__)
-```
 
 ## Development
 
-This project uses [UV](https://docs.astral.sh/uv/) for dependency management.
+This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
 
 ### Setup
 

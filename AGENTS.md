@@ -8,6 +8,13 @@ This is a Python library called `criu` (package name: `criu`, module name: `pdum
 
 The project uses a modern Python toolchain with UV for dependency management.
 
+## Documentation Style
+
+- Assume readers are comfortable with Linux internals and CRIU concepts; no beginner primers.
+- Prioritize brevity and actionable facts. Show commands/configs directly, minimal narrative.
+- When documenting CLI or workflows, lead with the command snippet, then a one-line explanation if needed.
+- Favor tables or bullet lists over paragraphs when it reduces scanning time.
+
 ## Important Rules
 
 ### Version Management

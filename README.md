@@ -14,6 +14,15 @@ Easy process freeze & thaw using [CRIU](https://criu.org/Main_Page)
 pip install habemus-papadum-criu
 ```
 
+> **Note (Ubuntu 24.04, November 2025):** CRIU packages are not published in the default Ubuntu 24.04 (Noble) apt repositories. Install the CRIU PPA manually before running the CLI or doctor:
+>
+> ```bash
+> echo 'deb http://download.opensuse.org/repositories/devel:/tools:/criu/xUbuntu_24.04/ /' | sudo tee /etc/apt/sources.list.d/devel:tools:criu.list
+> curl -fsSL https://download.opensuse.org/repositories/devel:tools:/criu/xUbuntu_24.04/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/devel_tools_criu.gpg > /dev/null
+> sudo apt update
+> sudo apt install criu
+> ```
+
 ### Check System Capability
 
 ```bash
@@ -45,6 +54,8 @@ Inside, goblins can be as clever as they like: they can spawn threads, map files
 This simplicity makes goblins easy to checkpoint, serialize, and resurrect (e.g., with CRIU). When you bring a goblin back to life, you only need to restore its three pipes — its ears, its mouth, and its voice. Everything else is internal mischief.
 
 API usage starts with `pdum.criu.goblins.freeze(pid, images_dir, leave_running=True)` to checkpoint a goblin process, and `pdum.criu.goblins.thaw(...)` / `thaw_async(...)` to reconnect to it with fresh stdin/stdout/stderr pipes. Consult the module docstrings for full details.
+
+- Tutorial notebook: `docs/goblins.ipynb`. By default the CRIU cells are skipped; set `RUN_GOBLIN_DEMO=1` when launching Jupyter to execute the live demo.
 
 ### Live testing
 

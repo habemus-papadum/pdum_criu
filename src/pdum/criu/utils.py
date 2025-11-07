@@ -371,3 +371,29 @@ def check_sudo_closefrom() -> tuple[bool, str | None]:
     except RuntimeError as exc:
         return False, str(exc)
     return True, None
+
+
+def doctor_check_results(verbose: bool = True) -> list[tuple[str, bool, str | None]]:
+    """Run the same checks as the CLI doctor command.
+
+    Returns a list of ``(label, ok, message)`` tuples.
+    """
+
+    checks = [
+        ("Password-less sudo", ensure_sudo),
+        ("CRIU", ensure_criu),
+        ("CRIU-ns", ensure_criu_ns),
+        ("pgrep", ensure_pgrep),
+    ]
+
+    results: list[tuple[str, bool, str | None]] = []
+    for label, checker in checks:
+        try:
+            ok = bool(checker(verbose=verbose))
+            results.append((label, ok, None))
+        except Exception as exc:  # pragma: no cover - best-effort reporting
+            results.append((label, False, str(exc)))
+
+    closefrom_ok, closefrom_msg = check_sudo_closefrom()
+    results.append(("sudo closefrom_override", closefrom_ok, closefrom_msg))
+    return results

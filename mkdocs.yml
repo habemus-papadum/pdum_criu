@@ -1,8 +1,8 @@
 site_name: criu
 site_description: Easy process freeze & thaw
 site_author: Nehal Patel
-repo_url: https://github.com/habemus-papadum/criu
-repo_name: criu
+repo_url: https://github.com/habemus-papadum/pdum_criu
+repo_name: pdum_criu
 
 theme:
   name: "material"
@@ -29,3 +29,5 @@ plugins:
           options:
             docstring_style: numpy
             show_submodules: true
+exclude_docs: |
+  _goblin_runs/**

@@ -1,12 +1,16 @@
 # criu
 
 [![CI](https://github.com/habemus-papadum/pdum_criu/actions/workflows/ci.yml/badge.svg)](https://github.com/habemus-papadum/pdum_criu/actions/workflows/ci.yml)
+[![Coverage](https://raw.githubusercontent.com/habemus-papadum/pdum_criu/python-coverage-comment-action-data/badge.svg)](https://htmlpreview.github.io/?https://github.com/habemus-papadum/pdum_criu/blob/python-coverage-comment-action-data/htmlcov/index.html)
 [![PyPI](https://img.shields.io/pypi/v/habemus-papadum-criu.svg)](https://pypi.org/project/habemus-papadum-criu/)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
-Easy process freeze & thaw
+Easy process freeze & thaw using [CRIU](https://criu.org/Main_Page)
+
+Notes:
+Uses non-interactive `sudo` and `criu` under the hood
 
 ## Installation
 

@@ -605,6 +605,9 @@ wheels = [
 name = "habemus-papadum-criu"
 version = "0.1.0a0"
 source = { editable = "." }
+dependencies = [
+    { name = "rich" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -627,6 +630,7 @@ dev = [
 ]
 
 [package.metadata]
+requires-dist = [{ name = "rich", specifier = ">=14.2.0" }]
 
 [package.metadata.requires-dev]
 dev = [

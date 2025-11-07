@@ -23,6 +23,19 @@ Prints a green/red summary so you can fix env.
 
 **Note:** Currently uses non-interactive `sudo` and `criu` under the hood
 
+### CLI commands
+
+- `pdum-criu shell freeze`: snapshot a running PID/pgrep match into a CRIU image directory.
+- `pdum-criu shell thaw`: restore a previously frozen image set.
+- `pdum-criu shell beam`: freeze then immediately thaw (beam) a target shell.
+- `pdum-criu doctor`: check sudo/CRIU/pgrep availability before running anything.
+
+Run `pdum-criu <command> --help` for full options and examples.
+
+### Known limitations
+
+- CRIU can’t restore shells spawned inside the VS Code integrated terminal—the pseudo-terminal belongs to VS Code’s pty proxy, so `criu restore` errors with `tty: No task found with sid …`. Run the target inside a real terminal (tmux/screen/gnome-terminal) or detach it with `setsid`/`script` before calling `pdum-criu shell freeze`/`shell beam`, otherwise thaw will fail (the CLI now warns/blocks by default).
+
 
 
 ## Development

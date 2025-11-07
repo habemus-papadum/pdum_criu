@@ -27,7 +27,6 @@ __all__ = [
     "resolve_target_pid",
     "tail_file",
     "spawn_directory_cleanup",
-    "spawn_log_renamer",
 ]
 
 _ENV_PREFIX = "PDUM_CRIU_"
@@ -325,47 +324,6 @@ def spawn_directory_cleanup(path: Path, watched_pid: int) -> None:
 
     subprocess.Popen(
         [sys.executable, "-c", script, os.fspath(path), str(watched_pid)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        close_fds=True,
-    )
-
-
-def spawn_log_renamer(log_path: Path, pidfile: Path) -> None:
-    """
-    Spawn a background helper that renames ``log_path`` to ``thaw.<pid>.log``.
-    """
-
-    script = textwrap.dedent(
-        """
-        from pathlib import Path
-        import sys
-        import time
-
-        log_path = Path(sys.argv[1])
-        pidfile = Path(sys.argv[2])
-
-        while True:
-            if pidfile.exists():
-                try:
-                    content = pidfile.read_text(encoding="utf-8").strip()
-                except OSError:
-                    content = ""
-                if content:
-                    target = log_path.with_name(f"thaw.{content}.log")
-                    try:
-                        log_path.replace(target)
-                    except FileNotFoundError:
-                        pass
-                    break
-            if not log_path.exists() and not pidfile.exists():
-                break
-            time.sleep(0.5)
-        """
-    )
-
-    subprocess.Popen(
-        [sys.executable, "-c", script, os.fspath(log_path), os.fspath(pidfile)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         close_fds=True,

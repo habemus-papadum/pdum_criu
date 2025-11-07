@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
+import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -70,6 +73,16 @@ def shell_freeze(
         "--show-command/--hide-command",
         help="Print the CRIU command before executing it.",
     ),
+    show_tail: bool = typer.Option(
+        True,
+        "--show-tail/--hide-tail",
+        help="Display the last five lines of the freeze log after success.",
+    ),
+    validate_tty: bool = typer.Option(
+        True,
+        "--validate-tty/--no-validate-tty",
+        help="Fail fast if the process is using an unsupported terminal (e.g., VS Code).",
+    ),
 ) -> None:
     """Freeze a running shell/job into a CRIU image directory."""
 
@@ -90,6 +103,18 @@ def shell_freeze(
     images_dir = _prepare_dir(images_dir)
     log_path = _resolve_log_path(log_file, images_dir, f"freeze.{target_pid}.log")
 
+    if validate_tty:
+        ok, reason = _tty_is_supported(target_pid)
+        if not ok:
+            console.print(
+                "[bold red]Cannot freeze target:[/] "
+                f"{reason}\n"
+                "[bold yellow]Hint:[/] Use a real terminal (tmux/screen/gnome-terminal) "
+                "or detach via `setsid`/`script`. VS Code's integrated terminal is unsupported. "
+                "Override with [bold cyan]--no-validate-tty[/] only if you plan to thaw inside VS Code."
+            )
+            raise typer.Exit(code=1)
+
     command = _build_criu_dump_command(
         sudo_path,
         criu_path,
@@ -104,6 +129,9 @@ def shell_freeze(
     exit_code = _run_command(command, show=show_command)
     if exit_code == 0:
         console.print(f"[bold green]Freeze complete.[/] Log: {log_path}")
+        _record_freeze_metadata(images_dir, target_pid)
+        if show_tail:
+            _print_log_tail(sudo_path, log_path, lines=5)
         return
 
     tail = utils.tail_file(log_path, lines=10)
@@ -136,17 +164,17 @@ def shell_thaw(
         console.print(f"[bold red]Image directory does not exist:[/] {images_dir}")
         raise typer.Exit(code=1)
 
-    exit_code, initial_log, final_log, _ = _execute_restore(images_dir, show_command=show_command)
-    effective_log = final_log if final_log.exists() else initial_log
+    exit_code, log_path = _execute_restore(images_dir, show_command=show_command)
     if exit_code == 0:
-        console.print(f"[bold green]Restore complete.[/] Log: {effective_log}")
+        console.print(f"[bold green]Restore complete.[/] Log: {log_path}")
         return
 
     console.print(f"[bold red]Restore failed (exit {exit_code}).[/]")
-    tail = utils.tail_file(effective_log, lines=10)
+    tail = utils.tail_file(log_path, lines=10)
     if tail:
         console.print("[bold yellow]Log tail:[/]")
         console.print(tail)
+    _maybe_report_vscode_from_metadata(images_dir)
     raise typer.Exit(code=exit_code)
 
 
@@ -228,22 +256,22 @@ def shell_beam(
             console.print(tail)
         raise typer.Exit(code=exit_code)
 
+    _record_freeze_metadata(images_dir, target_pid)
     console.print(f"[bold cyan]Thawing beam image from {images_dir}[/]")
-    restore_exit, initial_log, final_log, thaw_pid = _execute_restore(images_dir, show_command=show_command)
-    effective_log = final_log if final_log.exists() else initial_log
+    restore_exit, log_path = _execute_restore(images_dir, show_command=show_command)
     if restore_exit != 0:
         console.print(f"[bold red]Beam restore failed (exit {restore_exit}).[/]")
-        tail = utils.tail_file(effective_log, lines=10)
+        tail = utils.tail_file(log_path, lines=10)
         if tail:
             console.print("[bold yellow]Log tail:[/]")
             console.print(tail)
+        _maybe_report_vscode_from_metadata(images_dir, fallback_pid=target_pid)
         raise typer.Exit(code=restore_exit)
 
     if cleanup:
-        watcher_pid = thaw_pid or os.getpid()
-        utils.spawn_directory_cleanup(images_dir, watcher_pid)
+        utils.spawn_directory_cleanup(images_dir, os.getpid())
 
-    console.print(f"[bold green]Beam complete.[/] Restore log: {effective_log}")
+    console.print(f"[bold green]Beam complete.[/] Restore log: {log_path}")
 
 
 @app.command("doctor")
@@ -349,7 +377,6 @@ def _build_criu_restore_command(
     criu_ns_path: str,
     images_dir: Path,
     log_path: Path,
-    pidfile: Path,
 ) -> list[str]:
     return [
         sudo_path,
@@ -361,15 +388,13 @@ def _build_criu_restore_command(
         "--shell-job",
         "-o",
         str(log_path),
-        "--pidfile",
-        str(pidfile),
     ]
 
 
 def _run_command(command: list[str], *, show: bool) -> int:
     rendered = shlex.join(command)
     if show:
-        console.print(f"[bold magenta]$ {rendered}[/]")
+        print(f"$ {rendered}")
 
     result = os.system(rendered)
     if os.WIFEXITED(result):
@@ -379,7 +404,7 @@ def _run_command(command: list[str], *, show: bool) -> int:
     return result
 
 
-def _execute_restore(images_dir: Path, *, show_command: bool) -> tuple[int, Path, Path, Optional[int]]:
+def _execute_restore(images_dir: Path, *, show_command: bool) -> tuple[int, Path]:
     utils.ensure_sudo(verbose=True, raise_=True)
     criu_ns_path = utils.ensure_criu_ns(verbose=True, raise_=True)
     if not criu_ns_path:
@@ -387,28 +412,179 @@ def _execute_restore(images_dir: Path, *, show_command: bool) -> tuple[int, Path
 
     sudo_path = utils.resolve_command("sudo")
     log_path = _create_temp_log(images_dir, prefix="restore")
-    pidfile = images_dir / "thaw.pid"
-    if pidfile.exists():
-        pidfile.unlink()
-    utils.spawn_log_renamer(log_path, pidfile)
 
-    command = _build_criu_restore_command(sudo_path, criu_ns_path, images_dir, log_path, pidfile)
+    command = _build_criu_restore_command(sudo_path, criu_ns_path, images_dir, log_path)
     exit_code = _run_command(command, show=show_command)
-    thaw_pid = _read_pidfile(pidfile)
-    final_log = log_path.with_name(f"thaw.{thaw_pid}.log") if thaw_pid else log_path
-    return exit_code, log_path, final_log, thaw_pid
+    return exit_code, log_path
 
 
-def _read_pidfile(pidfile: Path) -> Optional[int]:
-    if not pidfile.exists():
-        return None
+def _print_log_tail(sudo_path: str, log_path: Path, *, lines: int) -> None:
+    if not log_path.exists():
+        console.print(f"[bold yellow]Log file not found:[/] {log_path}")
+        return
+
+    command = [sudo_path, "-n", "tail", "-n", str(lines), str(log_path)]
     try:
-        content = pidfile.read_text(encoding="utf-8").strip()
+        result = subprocess.run(
+            command,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except OSError as exc:
+        console.print(f"[bold yellow]Unable to read log tail:[/] {exc}")
+        return
+
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        console.print(
+            "[bold yellow]Unable to read log tail (sudo tail failed).[/] "
+            f"Exit {result.returncode}: {stderr}"
+        )
+        return
+
+    output = result.stdout.rstrip()
+    if output:
+        console.print("[bold cyan]Log tail:[/]")
+        console.print(output)
+
+
+def _tty_is_supported(pid: int) -> tuple[bool, str]:
+    tty_path = _resolve_process_tty(pid)
+    if not tty_path:
+        return False, "The process is not attached to a controlling TTY."
+
+    if not tty_path.startswith("/dev/pts/"):
+        return False, f"Controlling terminal {tty_path} is not a /dev/pts/ device."
+
+    if not Path(tty_path).exists():
+        return False, f"Controlling terminal {tty_path} no longer exists."
+
+    if _looks_like_vscode_terminal(pid):
+        return False, "The process appears to run inside the VS Code integrated terminal."
+
+    return True, ""
+
+
+def _resolve_process_tty(pid: int) -> Optional[str]:
+    fd0 = Path(f"/proc/{pid}/fd/0")
+    try:
+        return os.readlink(fd0)
     except OSError:
         return None
-    if not content:
+
+
+def _metadata_path(images_dir: Path) -> Path:
+    return images_dir / ".pdum_criu_meta.json"
+
+
+def _record_freeze_metadata(images_dir: Path, pid: int) -> None:
+    if pid <= 0:
+        return
+    metadata = {
+        "pid": pid,
+        "captured_at": datetime.now(timezone.utc).isoformat(),
+        "vscode_terminal": _looks_like_vscode_terminal(pid),
+    }
+    try:
+        _metadata_path(images_dir).write_text(json.dumps(metadata), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _read_freeze_metadata(images_dir: Path) -> Optional[dict]:
+    path = _metadata_path(images_dir)
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError:
         return None
     try:
-        return int(content)
-    except ValueError:
+        return json.loads(content)
+    except json.JSONDecodeError:
         return None
+
+
+def _maybe_report_vscode_from_metadata(images_dir: Path, fallback_pid: Optional[int] = None) -> None:
+    meta = _read_freeze_metadata(images_dir)
+    vscode_flag = None
+    pid = fallback_pid
+
+    if meta:
+        if isinstance(meta.get("pid"), int):
+            pid = meta["pid"]
+        vscode_flag = meta.get("vscode_terminal")
+
+    if vscode_flag is None and pid and _is_process_alive(pid):
+        vscode_flag = _looks_like_vscode_terminal(pid)
+
+    if not vscode_flag:
+        return
+
+    console.print(
+        "[bold yellow]Hint:[/] The target appears to be running inside the VS Code integrated terminal. "
+        "CRIU cannot reattach those pseudo-terminals, so freeze/beam restore will fail with "
+        "`tty: No task found with sid …`. Launch the workload in a standalone terminal "
+        "or detach it with `setsid`/`script` before retrying."
+    )
+
+
+def _looks_like_vscode_terminal(pid: int) -> bool:
+    if _env_points_to_vscode(pid):
+        return True
+    current = pid
+    seen: set[int] = set()
+    while current > 1 and current not in seen:
+        seen.add(current)
+        cmdline = _read_proc_cmdline(current)
+        if "vscode" in cmdline or "code - insiders" in cmdline or "code-oss" in cmdline:
+            return True
+        current = _read_proc_ppid(current)
+    return False
+
+
+def _env_points_to_vscode(pid: int) -> bool:
+    entries = _read_proc_environ(pid)
+    for entry in entries:
+        if entry.startswith("TERM_PROGRAM=") and entry.split("=", 1)[1].lower() == "vscode":
+            return True
+        if entry.startswith("VSCODE_"):
+            return True
+    return False
+
+
+def _read_proc_environ(pid: int) -> list[str]:
+    path = Path(f"/proc/{pid}/environ")
+    try:
+        content = path.read_bytes()
+    except OSError:
+        return []
+    text = content.decode("utf-8", errors="ignore")
+    return [entry for entry in text.split("\x00") if entry]
+
+
+def _read_proc_cmdline(pid: int) -> str:
+    path = Path(f"/proc/{pid}/cmdline")
+    try:
+        content = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return ""
+    return content.replace("\x00", " ").lower()
+
+
+def _read_proc_ppid(pid: int) -> int:
+    path = Path(f"/proc/{pid}/status")
+    try:
+        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            if line.startswith("PPid:"):
+                try:
+                    return int(line.split(":", 1)[1].strip())
+                except ValueError:
+                    return 0
+    except OSError:
+        return 0
+    return 0
+
+
+def _is_process_alive(pid: int) -> bool:
+    return Path(f"/proc/{pid}").exists()

@@ -19,6 +19,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "pytest-asyncio>=1.2.0",
     "rich>=14.2.0",
     "typer>=0.20.0",
 ]
@@ -75,6 +76,9 @@ addopts = "-s"
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+markers = [
+    "criu_live: marks tests that require CRIU + password-less sudo",
+]
 
 [tool.coverage.run]
 source = ["src/pdum/criu"]

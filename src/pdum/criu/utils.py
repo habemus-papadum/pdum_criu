@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
 import subprocess
 import sys
 import textwrap
-import time
 from collections import deque
 from pathlib import Path
 from shutil import which
@@ -27,9 +25,13 @@ __all__ = [
     "resolve_target_pid",
     "tail_file",
     "spawn_directory_cleanup",
+    "ensure_sudo_closefrom",
+    "check_sudo_closefrom",
 ]
 
 _ENV_PREFIX = "PDUM_CRIU_"
+_SUDO_CLOSEFROM_SUPPORTED: bool | None = None
+_SUDO_CLOSEFROM_ERROR: str | None = None
 
 
 def resolve_command(executable: str) -> str:
@@ -328,3 +330,44 @@ def spawn_directory_cleanup(path: Path, watched_pid: int) -> None:
         stderr=subprocess.DEVNULL,
         close_fds=True,
     )
+
+
+def ensure_sudo_closefrom() -> None:
+    """
+    Verify that ``sudo`` supports the ``-C`` flag (closefrom_override).
+    """
+
+    global _SUDO_CLOSEFROM_SUPPORTED, _SUDO_CLOSEFROM_ERROR
+
+    if _SUDO_CLOSEFROM_SUPPORTED:
+        return
+    if _SUDO_CLOSEFROM_SUPPORTED is False:
+        raise RuntimeError(_SUDO_CLOSEFROM_ERROR or "sudo closefrom_override is not enabled.")
+
+    sudo_path = resolve_command("sudo")
+    result = subprocess.run([sudo_path, "-n", "-C", "32", "true"], capture_output=True, text=True)
+    if result.returncode == 0:
+        _SUDO_CLOSEFROM_SUPPORTED = True
+        _SUDO_CLOSEFROM_ERROR = None
+        return
+
+    detail = (result.stderr or result.stdout or "sudo rejected -C").strip()
+    _SUDO_CLOSEFROM_SUPPORTED = False
+    _SUDO_CLOSEFROM_ERROR = (
+        "sudo is not configured with closefrom_override; enable it via `sudo visudo` "
+        "(add `Defaults    closefrom_override` or `Defaults:YOURUSER    closefrom_override`). "
+        f"Original sudo output: {detail}"
+    )
+    raise RuntimeError(_SUDO_CLOSEFROM_ERROR)
+
+
+def check_sudo_closefrom() -> tuple[bool, str | None]:
+    """
+    Probe ``sudo`` for closefrom_override support without raising.
+    """
+
+    try:
+        ensure_sudo_closefrom()
+    except RuntimeError as exc:
+        return False, str(exc)
+    return True, None

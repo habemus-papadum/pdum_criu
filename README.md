@@ -32,9 +32,47 @@ Prints a green/red summary so you can fix env.
 
 Run `pdum-criu <command> --help` for full options and examples.
 
+## Goblins
+
+🧙‍♂️ Goblins
+
+__Small creatures that live in pipes.__
+
+Goblins are minimal, self-contained processes that speak to the outside world only through standard input, standard output, and standard error. They don’t need sockets, frameworks, or APIs — just a stream in, a stream out, and a place to mutter when things go wrong.
+
+Inside, goblins can be as clever as they like: they can spawn threads, map files into memory, make HTTP requests, or run background jobs. None of that changes their essence. What defines a goblin is not how it thinks, but how it speaks — through the ancient UNIX tongue of stdin, stdout, and stderr.
+
+This simplicity makes goblins easy to checkpoint, serialize, and resurrect (e.g., with CRIU). When you bring a goblin back to life, you only need to restore its three pipes — its ears, its mouth, and its voice. Everything else is internal mischief.
+
+API usage starts with `pdum.criu.goblins.freeze(pid, images_dir, leave_running=True)` to checkpoint a goblin process, and `pdum.criu.goblins.thaw(...)` / `thaw_async(...)` to reconnect to it with fresh stdin/stdout/stderr pipes. Consult the module docstrings for full details.
+
+### Live testing
+
+To run the end-to-end CRIU test locally (requires Linux, CRIU, `pgrep`, and password-less `sudo`):
+
+```bash
+pytest tests/test_live_criu.py -k goblin_freeze_live
+```
+
 ### Known limitations
 
 - CRIU can’t restore shells spawned inside the VS Code integrated terminal—the pseudo-terminal belongs to VS Code’s pty proxy, so `criu restore` errors with `tty: No task found with sid …`. Run the target inside a real terminal (tmux/screen/gnome-terminal) or detach it with `setsid`/`script` before calling `pdum-criu shell freeze`/`shell beam`, otherwise thaw will fail (the CLI now warns/blocks by default).
+
+### Sudo configuration
+
+Thawing goblins requires `sudo` to keep inherited file descriptors open (`sudo -C …`). If `pdum-criu doctor` reports a `closefrom_override` failure, run `sudo visudo` and add one of:
+
+```
+Defaults    closefrom_override
+```
+
+or a user-scoped variant:
+
+```
+Defaults:youruser    closefrom_override
+```
+
+Save, exit, and rerun the doctor to confirm the setting.
 
 
 

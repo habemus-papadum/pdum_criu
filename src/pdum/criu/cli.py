@@ -292,6 +292,14 @@ def doctor() -> None:
         ("pgrep", utils.ensure_pgrep),
     ]
 
+    closefrom_status, closefrom_msg = utils.check_sudo_closefrom()
+    if closefrom_status:
+        checks.append(("sudo closefrom_override", lambda **_: True))
+    else:
+        def _fail_closefrom(**_) -> bool:
+            return False
+        checks.append(("sudo closefrom_override", _fail_closefrom))
+
     all_ok = True
     for label, checker in checks:
         try:
@@ -304,6 +312,13 @@ def doctor() -> None:
                 console.print(f"[bold green]✓ {label}[/]")
             else:
                 console.print(f"[bold red]✗ {label}[/]")
+                if label == "sudo closefrom_override" and closefrom_msg:
+                    console.print(
+                        "[bold yellow]Tip:[/] Run `sudo visudo` and add either "
+                        "`Defaults    closefrom_override` or "
+                        "`Defaults:YOURUSER    closefrom_override`."
+                    )
+                    console.print(f"    {closefrom_msg}")
         all_ok = all_ok and ok
 
     if all_ok:

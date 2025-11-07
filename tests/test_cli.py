@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from typer.testing import CliRunner
 
@@ -9,13 +11,20 @@ from pdum.criu import __version__, cli
 
 runner = CliRunner()
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
+
 
 def test_version_command_displays_version() -> None:
     """Version command should print the package version."""
     result = runner.invoke(cli.app, ["version"])
     assert result.exit_code == 0
-    assert "pdum-criu" in result.stdout
-    assert __version__ in result.stdout
+    plain = _strip_ansi(result.stdout)
+    assert "pdum-criu" in plain
+    assert __version__ in plain
 
 
 def test_shell_group_missing_subcommand_shows_help() -> None:
@@ -25,19 +34,12 @@ def test_shell_group_missing_subcommand_shows_help() -> None:
     assert "Usage" in result.stdout
 
 
-@pytest.mark.parametrize(
-    ("subcommand", "expected_snippet"),
-    [
-        ("freeze", "Freeze action"),
-        ("thaw", "Thaw action"),
-        ("beam", "Beam action"),
-    ],
-)
-def test_shell_subcommands_print_placeholders(subcommand: str, expected_snippet: str) -> None:
-    """Each placeholder command should emit its informative message."""
-    result = runner.invoke(cli.app, ["shell", subcommand])
+@pytest.mark.parametrize("subcommand", ["freeze", "thaw", "beam"])
+def test_shell_subcommands_help(subcommand: str) -> None:
+    """Each shell subcommand should provide helpful usage output."""
+    result = runner.invoke(cli.app, ["shell", subcommand, "--help"])
     assert result.exit_code == 0
-    assert expected_snippet in result.stdout
+    assert "Usage" in result.stdout
 
 
 def test_doctor_requires_linux(monkeypatch) -> None:
@@ -60,10 +62,12 @@ def test_doctor_success(monkeypatch) -> None:
     monkeypatch.setattr(cli.utils, "ensure_sudo", _make_checker(True))
     monkeypatch.setattr(cli.utils, "ensure_criu", _make_checker("/usr/bin/criu"))
     monkeypatch.setattr(cli.utils, "ensure_pgrep", _make_checker("/usr/bin/pgrep"))
+    monkeypatch.setattr(cli.utils, "check_sudo_closefrom", lambda: (True, None))
 
     result = runner.invoke(cli.app, ["doctor"])
     assert result.exit_code == 0
     assert "All doctor checks passed" in result.stdout
+    assert "closefrom_override" in result.stdout
 
 
 def test_doctor_failure(monkeypatch) -> None:
@@ -80,8 +84,11 @@ def test_doctor_failure(monkeypatch) -> None:
     monkeypatch.setattr(cli.utils, "ensure_sudo", _good_checker)
     monkeypatch.setattr(cli.utils, "ensure_criu", _bad_checker)
     monkeypatch.setattr(cli.utils, "ensure_pgrep", _good_checker)
+    monkeypatch.setattr(cli.utils, "check_sudo_closefrom", lambda: (False, "closefrom missing"))
 
     result = runner.invoke(cli.app, ["doctor"])
     assert result.exit_code == 0
     assert "✗ CRIU" in result.stdout
+    assert "✗ sudo closefrom_override" in result.stdout
+    assert "closefrom missing" in result.stdout
     assert "Resolve the failed checks" in result.stdout

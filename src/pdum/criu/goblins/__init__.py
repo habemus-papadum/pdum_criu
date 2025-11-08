@@ -94,6 +94,7 @@ def freeze(
     logger.debug("Running command: %s", shlex.join(context.command))
 
     result = subprocess.run(context.command, check=False)
+    _ensure_log_readable(context.log_path)
     _handle_freeze_result(result.returncode, context.log_path)
 
     _record_freeze_metadata(context.images_dir, pid, context.pipe_ids)
@@ -126,6 +127,7 @@ async def freeze_async(
 
     process = await asyncio.create_subprocess_exec(*context.command)
     returncode = await process.wait()
+    _ensure_log_readable(context.log_path)
     _handle_freeze_result(returncode, context.log_path)
 
     _record_freeze_metadata(context.images_dir, pid, context.pipe_ids)
@@ -580,6 +582,7 @@ def _run_criu_restore(context: _ThawContext, pipes: _StdioPipes) -> None:
     command += context.restore_cmd + pipes.inherit_args
 
     result = subprocess.run(command, check=False, pass_fds=child_fds)
+    _ensure_log_readable(context.log_path)
     if result.returncode != 0:
         pipes.close_parent_ends()
         _handle_thaw_failure(result.returncode, context.log_path)
@@ -596,6 +599,21 @@ def _handle_thaw_failure(returncode: int, log_path: Path) -> None:
     raise RuntimeError(
         f"CRIU restore failed with exit code {returncode}. Log tail:\n{log_tail}"
     )
+
+
+def _ensure_log_readable(log_path: Path) -> None:
+    if not log_path.exists():
+        return
+    if os.access(log_path, os.R_OK):
+        return
+    try:
+        sudo_path = utils.resolve_command("sudo")
+    except (FileNotFoundError, ValueError):
+        return
+
+    owner = f"{os.getuid()}:{os.getgid()}"
+    subprocess.run([sudo_path, "-n", "chown", owner, str(log_path)], check=False)
+    subprocess.run([sudo_path, "-n", "chmod", "0644", str(log_path)], check=False)
 
 
 def _wait_for_pidfile(pidfile: Path, timeout: float = 5.0) -> int:

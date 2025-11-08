@@ -19,7 +19,6 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "pytest-asyncio>=1.2.0",
     "rich>=14.2.0",
     "typer>=0.20.0",
 ]
@@ -28,9 +27,9 @@ dependencies = [
 pdum-criu = "pdum.criu.cli:app"
 
 [project.urls]
-Homepage = "https://github.com/habemus-papadum/criu"
-Repository = "https://github.com/habemus-papadum/criu"
-Documentation = "https://github.com/habemus-papadum/criu"
+Homepage = "https://github.com/habemus-papadum/pdum_criu"
+Repository = "https://github.com/habemus-papadum/pdum_criu"
+Documentation = "https://github.com/habemus-papadum/pdum_criu"
 
 
 [build-system]
@@ -45,6 +44,7 @@ packages = ["src/pdum"]
 dev = [
     "hatch>=1.14.2",
     "pytest>=8.0.0",
+    "pytest-asyncio>=1.2.0",
     "pytest-cov>=7.0.0",
     "pytest-playwright>=0.5.0",
     "playwright>=1.45.0",

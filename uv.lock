@@ -606,7 +606,6 @@ name = "habemus-papadum-criu"
 version = "0.1.0a0"
 source = { editable = "." }
 dependencies = [
-    { name = "pytest-asyncio" },
     { name = "rich" },
     { name = "typer" },
 ]
@@ -624,6 +623,7 @@ dev = [
     { name = "playwright" },
     { name = "pre-commit" },
     { name = "pytest" },
+    { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "pytest-playwright" },
     { name = "rich" },
@@ -633,7 +633,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "pytest-asyncio", specifier = ">=1.2.0" },
     { name = "rich", specifier = ">=14.2.0" },
     { name = "typer", specifier = ">=0.20.0" },
 ]
@@ -651,6 +650,7 @@ dev = [
     { name = "playwright", specifier = ">=1.45.0" },
     { name = "pre-commit", specifier = ">=3.7.0" },
     { name = "pytest", specifier = ">=8.0.0" },
+    { name = "pytest-asyncio", specifier = ">=1.2.0" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "pytest-playwright", specifier = ">=0.5.0" },
     { name = "rich", specifier = ">=13.7.1" },

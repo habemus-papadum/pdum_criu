@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# CRIU "tree" demo: private mounts + two-level dump/restore
+set -euo pipefail
+
+ROOTDIR=/tmp/criu
+DEMOROOT=$ROOTDIR/demo2
+A=$DEMOROOT/A
+B=$DEMOROOT/B
+LOGS=$DEMOROOT/logs
+PIDS=$DEMOROOT/pids
+
+die() { echo "ERROR: $*"; exit 1; }
+
+echo "== CRIU version =="
+criu --version || true
+
+echo "== Clean old demo2 =="
+# try to kill known pids from prior runs (ignore failures)
+shopt -s nullglob
+for f in "$PIDS"/pid_*; do
+  pid=$(cat "$f" 2>/dev/null || true)
+  if [[ -n "${pid:-}" && -e "/proc/$pid" ]]; then
+    sudo kill -TERM "$pid" || true
+  fi
+done
+shopt -u nullglob
+rm -rf "$DEMOROOT"
+mkdir -p "$A" "$B" "$LOGS" "$PIDS"
+
+echo
+echo "== 1) Start process in NEW mount ns, make mounts PRIVATE, drop EFI mounts, fully detach =="
+# - new mount ns
+# - make / recursive-private (no propagation)
+# - unmount EFI/efivars (CRIU 4.1.1 can't dump them)
+# - spawn a long 'sleep' detached from any TTY; record its PID
+sudo unshare -m bash -lc '
+  set -e
+  mount --make-rprivate /
+  umount /boot/efi 2>/dev/null || true
+  umount /sys/firmware/efi/efivars 2>/dev/null || true
+  umount /sys/kernel/config 2>/dev/null || true
+for p in \
+  /proc/sys/fs/binfmt_misc \
+  /sys/fs/bpf \
+  /sys/fs/pstore \
+  /sys/kernel/debug \
+  /sys/kernel/config \
+  /sys/fs/fuse/connections \
+  /run/rpc_pipefs \
+  /dev/hugepages  
+do
+  umount "$p" 2>/dev/null || true
+done
+
+  setsid nohup bash -c "echo \$\$ > '"$PIDS"'/pid_root; exec sleep 1000000" >/dev/null 2>&1 &
+  # keep shell alive briefly so the background process can write pid_root
+  sleep 0.2
+' &
+
+# wait for pid_root to appear
+for i in {1..50}; do
+  [[ -s "$PIDS/pid_root" ]] && break
+  sleep 0.1
+done
+[[ -s "$PIDS/pid_root" ]] || die "pid_root not created"
+ROOT_PID=$(cat "$PIDS/pid_root")
+echo "Root process PID: $ROOT_PID"
+[[ -e "/proc/$ROOT_PID" ]] || die "root pid not running"
+
+# capture mountinfo (sudo handles redirection)
+sudo sh -c "echo '---- /proc/$ROOT_PID/mountinfo (root) ----' > '$LOGS/mountinfo_root.txt'; \
+             cat '/proc/$ROOT_PID/mountinfo' >> '$LOGS/mountinfo_root.txt'"
+
+echo
+echo "== 2) First dump (A) of root process =="
+if ! sudo criu dump -D "$A" -t "$ROOT_PID" -o "$LOGS/dump_A.log" -v4 --leave-running; then
+  echo "--- dump_A.log (tail) ---"; sudo tail -n 120 "$LOGS/dump_A.log" || true
+  die "criu dump A failed"
+fi
+echo "Dump A complete."
+
+echo
+echo "== 3) First restore (A -> A1) =="
+if ! sudo criu-ns restore -D "$A" --pidfile "$PIDS/pid_A1" -o "$LOGS/restore_A1.log"; then
+  echo "--- restore_A1.log (tail) ---"; sudo tail -n 120 "$LOGS/restore_A1.log" || true
+  die "restore A1 failed"
+fi
+A1_PID=$(cat "$PIDS/pid_A1")
+echo "Restored A1 PID: $A1_PID"
+[[ -e "/proc/$A1_PID" ]] || die "A1 pid not running"
+sudo sh -c "echo '---- /proc/$A1_PID/mountinfo (A1) ----' > '$LOGS/mountinfo_A1.txt'; \
+             cat '/proc/$A1_PID/mountinfo' >> '$LOGS/mountinfo_A1.txt'"
+
+echo
+echo "== 4) Second dump (B) of A1 =="
+if ! sudo criu dump -D "$B" -t "$A1_PID" -o "$LOGS/dump_B.log" -v4 --leave-running; then
+  echo "--- dump_B.log (tail) ---"; sudo tail -n 120 "$LOGS/dump_B.log" || true
+  die "criu dump B failed"
+fi
+echo "Dump B complete."
+
+echo
+echo "== 5) Second restore (B -> B1) =="
+if ! sudo criu-ns restore -D "$B" --pidfile "$PIDS/pid_B1" -o "$LOGS/restore_B1.log"; then
+  echo "--- restore_B1.log (tail) ---"; sudo tail -n 120 "$LOGS/restore_B1.log" || true
+  die "restore B1 failed"
+fi
+B1_PID=$(cat "$PIDS/pid_B1")
+echo "Restored B1 PID: $B1_PID"
+[[ -e "/proc/$B1_PID" ]] || die "B1 pid not running"
+sudo sh -c "echo '---- /proc/$B1_PID/mountinfo (B1) ----' > '$LOGS/mountinfo_B1.txt'; \
+             cat '/proc/$B1_PID/mountinfo' >> '$LOGS/mountinfo_B1.txt'"
+
+echo
+echo "== 6) Quick propagation checks =="
+echo "-- Root / line:"
+grep -m1 ' / ' "$LOGS/mountinfo_root.txt" || true
+echo "-- A1 / line:"
+grep -m1 ' / ' "$LOGS/mountinfo_A1.txt" || true
+echo "-- B1 / line:"
+grep -m1 ' / ' "$LOGS/mountinfo_B1.txt" || true
+
+echo
+echo "SUCCESS: two-level dump/restore completed."
+echo "Logs in $LOGS"
+echo "PIDs: root=$ROOT_PID A1=$A1_PID B1=$B1_PID"
+echo
+echo "Cleanup hint:"
+echo "  sudo kill $ROOT_PID $A1_PID $B1_PID 2>/dev/null || true"

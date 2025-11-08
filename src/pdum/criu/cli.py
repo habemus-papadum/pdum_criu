@@ -10,7 +10,7 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Callable, NamedTuple, Optional, TypeVar
 
 import typer
 from rich.console import Console
@@ -24,6 +24,24 @@ shell_app = typer.Typer(help="Shell helpers for CRIU workflows.")
 console = Console()
 
 app.add_typer(shell_app, name="shell", help="Manage shell-based freeze/thaw operations.")
+
+T = TypeVar("T")
+
+
+class RestoreResult(NamedTuple):
+    exit_code: int
+    log_path: Path
+    pidfile: Path
+
+
+def _require(func: Callable[..., T], *args, **kwargs) -> T:
+    try:
+        return func(*args, **kwargs)
+    except typer.Exit:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive UX
+        console.print(f"[bold red]{exc}[/]")
+        raise typer.Exit(code=1)
 
 
 @app.callback(invoke_without_command=True)
@@ -93,13 +111,11 @@ def shell_freeze(
         raise typer.Exit(code=1)
 
     target_pid = _resolve_pid_option(pid, pgrep)
-    utils.ensure_sudo(verbose=True, raise_=True)
-    utils.ensure_pgrep(verbose=True, raise_=True)
-    criu_path = utils.ensure_criu(verbose=True, raise_=True)
-    if not criu_path:
-        raise typer.Exit(code=1)
+    _require(utils.ensure_sudo, verbose=True, raise_=True)
+    _require(utils.ensure_pgrep, verbose=True, raise_=True)
+    criu_path = _require(utils.ensure_criu, verbose=True, raise_=True)
 
-    sudo_path = utils.resolve_command("sudo")
+    sudo_path = _require(utils.resolve_command, "sudo")
     images_dir = _prepare_dir(images_dir)
     log_path = _resolve_log_path(log_file, images_dir, f"freeze.{target_pid}.log")
 
@@ -150,6 +166,11 @@ def shell_thaw(
         "--show-command/--hide-command",
         help="Print the CRIU command before executing it.",
     ),
+    pidfile: Optional[Path] = typer.Option(
+        None,
+        "--pidfile",
+        help="Path where CRIU writes the restored PID (defaults to a temp file in the image dir).",
+    ),
 ) -> None:
     """Restore a shell/job from a CRIU image directory."""
 
@@ -164,18 +185,32 @@ def shell_thaw(
         console.print(f"[bold red]Image directory does not exist:[/] {images_dir}")
         raise typer.Exit(code=1)
 
-    exit_code, log_path = _execute_restore(images_dir, show_command=show_command)
-    if exit_code == 0:
-        console.print(f"[bold green]Restore complete.[/] Log: {log_path}")
+    pidfile_path, pidfile_is_temp = _resolve_pidfile_option(pidfile, images_dir, prefix="restore")
+    result = _execute_restore(images_dir, show_command=show_command, pidfile=pidfile_path)
+    if result.exit_code == 0:
+        restored_pid = _read_pidfile(result.pidfile)
+        if restored_pid is not None:
+            console.print(f"[bold green]Restore complete.[/] PID: {restored_pid}  Log: {result.log_path}")
+        else:
+            console.print(f"[bold green]Restore complete.[/] Log: {result.log_path}")
+            console.print(
+                f"[bold yellow]Warning:[/] Unable to read PID from {result.pidfile}."
+            )
+        if pidfile_is_temp:
+            _safe_unlink(result.pidfile)
+        else:
+            console.print(f"[bold cyan]PID file:[/] {result.pidfile}")
         return
 
-    console.print(f"[bold red]Restore failed (exit {exit_code}).[/]")
-    tail = utils.tail_file(log_path, lines=10)
+    console.print(f"[bold red]Restore failed (exit {result.exit_code}).[/]")
+    tail = utils.tail_file(result.log_path, lines=10)
     if tail:
         console.print("[bold yellow]Log tail:[/]")
         console.print(tail)
     _maybe_report_vscode_from_metadata(images_dir)
-    raise typer.Exit(code=exit_code)
+    if pidfile_is_temp:
+        _safe_unlink(pidfile_path)
+    raise typer.Exit(code=result.exit_code)
 
 
 @shell_app.command("beam")
@@ -210,6 +245,11 @@ def shell_beam(
         "--show-command/--hide-command",
         help="Print each CRIU command before executing it.",
     ),
+    pidfile: Optional[Path] = typer.Option(
+        None,
+        "--pidfile",
+        help="Path where CRIU writes the restored PID (defaults to a temp file in the image dir).",
+    ),
 ) -> None:
     """Freeze then immediately thaw a shell, cleaning up artifacts afterwards."""
 
@@ -220,13 +260,11 @@ def shell_beam(
         raise typer.Exit(code=1)
 
     target_pid = _resolve_pid_option(pid, pgrep)
-    utils.ensure_sudo(verbose=True, raise_=True)
-    utils.ensure_pgrep(verbose=True, raise_=True)
-    criu_path = utils.ensure_criu(verbose=True, raise_=True)
-    if not criu_path:
-        raise typer.Exit(code=1)
+    _require(utils.ensure_sudo, verbose=True, raise_=True)
+    _require(utils.ensure_pgrep, verbose=True, raise_=True)
+    criu_path = _require(utils.ensure_criu, verbose=True, raise_=True)
 
-    sudo_path = utils.resolve_command("sudo")
+    sudo_path = _require(utils.resolve_command, "sudo")
 
     if images_dir is None:
         images_dir = Path(tempfile.mkdtemp(prefix="pdum-criu-beam-"))
@@ -235,6 +273,7 @@ def shell_beam(
         images_dir = _prepare_dir(images_dir)
 
     log_path = _resolve_log_path(log_file, images_dir, f"freeze.{target_pid}.log")
+    pidfile_path, pidfile_is_temp = _resolve_pidfile_option(pidfile, images_dir, prefix="beam-restore")
 
     command = _build_criu_dump_command(
         sudo_path,
@@ -258,20 +297,41 @@ def shell_beam(
 
     _record_freeze_metadata(images_dir, target_pid)
     console.print(f"[bold cyan]Thawing beam image from {images_dir}[/]")
-    restore_exit, log_path = _execute_restore(images_dir, show_command=show_command)
-    if restore_exit != 0:
-        console.print(f"[bold red]Beam restore failed (exit {restore_exit}).[/]")
-        tail = utils.tail_file(log_path, lines=10)
+    restore_result = _execute_restore(images_dir, show_command=show_command, pidfile=pidfile_path)
+    if restore_result.exit_code != 0:
+        console.print(f"[bold red]Beam restore failed (exit {restore_result.exit_code}).[/]")
+        tail = utils.tail_file(restore_result.log_path, lines=10)
         if tail:
             console.print("[bold yellow]Log tail:[/]")
             console.print(tail)
         _maybe_report_vscode_from_metadata(images_dir, fallback_pid=target_pid)
-        raise typer.Exit(code=restore_exit)
+        if pidfile_is_temp:
+            _safe_unlink(pidfile_path)
+        raise typer.Exit(code=restore_result.exit_code)
+
+    restored_pid = _read_pidfile(restore_result.pidfile)
+    if restored_pid is not None:
+        console.print(
+            f"[bold green]Beam complete.[/] Restore PID: {restored_pid}  Log: {restore_result.log_path}"
+        )
+    else:
+        console.print(f"[bold green]Beam complete.[/] Restore log: {restore_result.log_path}")
+        console.print(
+            f"[bold yellow]Warning:[/] Unable to read PID from {restore_result.pidfile}."
+        )
 
     if cleanup:
-        utils.spawn_directory_cleanup(images_dir, os.getpid())
+        if restored_pid is None:
+            console.print(
+                "[bold yellow]Note:[/] Cleanup will run when this CLI exits because the restored PID is unknown."
+            )
+        watcher_pid = restored_pid if restored_pid is not None else os.getpid()
+        utils.spawn_directory_cleanup(images_dir, watcher_pid)
 
-    console.print(f"[bold green]Beam complete.[/] Restore log: {log_path}")
+    if pidfile_is_temp:
+        _safe_unlink(restore_result.pidfile)
+    else:
+        console.print(f"[bold cyan]PID file:[/] {restore_result.pidfile}")
 
 
 @app.command("doctor")
@@ -333,6 +393,14 @@ def _resolve_log_path(candidate: Optional[Path], base_dir: Path, default_name: s
     return path
 
 
+def _resolve_pidfile_option(candidate: Optional[Path], base_dir: Path, *, prefix: str) -> tuple[Path, bool]:
+    if candidate is None:
+        return _create_temp_pidfile(base_dir, prefix=prefix), True
+    path = candidate.expanduser().resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path, False
+
+
 def _build_criu_dump_command(
     sudo_path: str,
     criu_path: str,
@@ -368,11 +436,19 @@ def _create_temp_log(base_dir: Path, prefix: str) -> Path:
     return Path(temp_name)
 
 
+def _create_temp_pidfile(base_dir: Path, *, prefix: str) -> Path:
+    handle = tempfile.NamedTemporaryFile(prefix=f"{prefix}.", suffix=".pid", dir=os.fspath(base_dir), delete=False)
+    temp_name = handle.name
+    handle.close()
+    return Path(temp_name)
+
+
 def _build_criu_restore_command(
     sudo_path: str,
     criu_ns_path: str,
     images_dir: Path,
     log_path: Path,
+    pidfile: Path,
 ) -> list[str]:
     return [
         sudo_path,
@@ -384,6 +460,8 @@ def _build_criu_restore_command(
         "--shell-job",
         "-o",
         str(log_path),
+        "--pidfile",
+        str(pidfile),
     ]
 
 
@@ -400,18 +478,16 @@ def _run_command(command: list[str], *, show: bool) -> int:
     return result
 
 
-def _execute_restore(images_dir: Path, *, show_command: bool) -> tuple[int, Path]:
-    utils.ensure_sudo(verbose=True, raise_=True)
-    criu_ns_path = utils.ensure_criu_ns(verbose=True, raise_=True)
-    if not criu_ns_path:
-        raise typer.Exit(code=1)
+def _execute_restore(images_dir: Path, *, show_command: bool, pidfile: Path) -> RestoreResult:
+    _require(utils.ensure_sudo, verbose=True, raise_=True)
+    criu_ns_path = _require(utils.ensure_criu_ns, verbose=True, raise_=True)
 
-    sudo_path = utils.resolve_command("sudo")
+    sudo_path = _require(utils.resolve_command, "sudo")
     log_path = _create_temp_log(images_dir, prefix="restore")
 
-    command = _build_criu_restore_command(sudo_path, criu_ns_path, images_dir, log_path)
+    command = _build_criu_restore_command(sudo_path, criu_ns_path, images_dir, log_path, pidfile)
     exit_code = _run_command(command, show=show_command)
-    return exit_code, log_path
+    return RestoreResult(exit_code=exit_code, log_path=log_path, pidfile=pidfile)
 
 
 def _print_log_tail(sudo_path: str, log_path: Path, *, lines: int) -> None:
@@ -499,6 +575,27 @@ def _read_freeze_metadata(images_dir: Path) -> Optional[dict]:
         return json.loads(content)
     except json.JSONDecodeError:
         return None
+
+
+def _read_pidfile(pidfile: Path) -> Optional[int]:
+    try:
+        content = pidfile.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not content:
+        return None
+    try:
+        value = int(content)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def _safe_unlink(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def _maybe_report_vscode_from_metadata(images_dir: Path, fallback_pid: Optional[int] = None) -> None:

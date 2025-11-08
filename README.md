@@ -26,7 +26,7 @@ pip install habemus-papadum-criu
 ### Check System Capability
 
 ```bash
-uvx habemus-papadum-criu doctor
+uvx habemus-papadum-criu:pdum-criu doctor
 ```
 Prints a green/red summary so you can fix env.
 

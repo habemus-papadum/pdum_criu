@@ -41,7 +41,7 @@ Prints a green/red summary so you can fix env.
 
 Run `pdum-criu <command> --help` for full options and examples.
 
-## Goblins
+## Goblins API
 
 🧙‍♂️ Goblins
 

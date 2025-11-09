@@ -23,7 +23,7 @@ Goblins are minimal, self-contained processes that are in continuous dialogue wi
 
 This package aims to make Linux user-space checkpoint/restore (via CRIU) feel high-level: freeze a running “goblin” process without disturbing it, then replay from that checkpoint as many times as you like. 
 
-But, realistically, it’s a toolkit for folks already comfortable with Linux internals — high level helpers, but still aimed at power users who understand what CRIU is doing under the hood -- things you will break or just not work, and you will need to spelunk to sort it.
+But, realistically, it’s a toolkit for folks already comfortable with Linux internals — high level helpers, but still aimed at power users who understand what CRIU is doing under the hood -- things will break or just not work, and you will need to spelunk to sort it.
 
 Inside, goblins can be as clever as they like: they can spawn threads, map files into memory, make background HTTP requests, or run background jobs. None of that changes their essence. What defines a goblin is not how it thinks, but how it speaks — through the ancient UNIX tongue of stdin, stdout, and stderr.
 
@@ -54,9 +54,8 @@ sudo apt install criu
 ```bash
 uvx --from habemus-papadum-criu pdum-criu doctor
 ```
-Prints a green/red summary so you can fix your environment .
+Prints a green/red summary so you can fix your environment.
 
-**Note:** Currently uses non-interactive `sudo` and `criu` under the hood
 
 ### CLI commands
 

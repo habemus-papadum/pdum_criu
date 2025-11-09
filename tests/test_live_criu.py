@@ -231,6 +231,10 @@ def test_pipe_ids_from_images_live(tmp_path: Path) -> None:
         try:
             pipe_ids = goblins._pipe_ids_from_images(images_dir)
         except RuntimeError as exc:
+            # CRIT is present, but the CRIU build on this machine did not emit
+            # fdinfo/files metadata in the shape _pipe_ids_from_images expects.
+            # Rather than failing the entire live suite when CRIU omits those
+            # internals, we skip with the captured reason.
             pytest.skip(f"crit parsing failed: {exc}")
         assert set(pipe_ids) == {"stdin", "stdout", "stderr"}
         for value in pipe_ids.values():

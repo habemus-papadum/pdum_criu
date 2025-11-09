@@ -11,6 +11,8 @@ Freeze, thaw, & mulitply goblins using [CRIU](https://criu.org/Main_Page)
 
 Check out the [**Tutorial notebook**](https://habemus-papadum.github.io/pdum_criu/goblins/)  or use learn to use the CLI: `uvx habemus-papadum-criu:pdum-criu --help`
 
+> **Caveat Emptor**  
+> This toolkit drives `sudo`, `criu`, and friends like it stole them. If you don’t personally trust @habemus-papadum, the PyPI supply chain,  and everything else in the loop, you probably shouldn’t hand it a root prompt. Treat it like the loaded power tool it is.
 
 ## 🧙‍♂️ Goblins
 
@@ -183,3 +185,4 @@ uv build
 ## License
 
 MIT License - see LICENSE file for details.
+

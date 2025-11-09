@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import signal
+import time
 from pathlib import Path
 
 import pytest
@@ -18,6 +20,27 @@ from .test_live_criu import (
     _spawn_goblin,
     _terminate,
 )
+
+
+async def _async_read_line(reader, timeout: float = 5.0) -> bytes:
+    line = await asyncio.wait_for(reader.readline(), timeout=timeout)
+    if not line:
+        raise AssertionError("unexpected EOF while waiting for goblin output")
+    return line
+
+
+async def _async_write_line(writer, data: bytes) -> None:
+    writer.write(data)
+    await writer.drain()
+
+
+async def _wait_for_pidfile(pidfile: Path, timeout: float = 5.0) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if pidfile.exists():
+            return
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"pidfile {pidfile} was not created within {timeout}s")
 
 
 @pytest.mark.asyncio
@@ -41,7 +64,6 @@ async def test_goblin_freeze_async_live(tmp_path: Path) -> None:
             _terminate(proc)
 
 
-@pytest.mark.skip(reason="CRIU async thaw restore is under investigation.")
 @pytest.mark.asyncio
 async def test_goblin_thaw_async_live(tmp_path: Path) -> None:
     _require_live_prereqs()
@@ -50,7 +72,10 @@ async def test_goblin_thaw_async_live(tmp_path: Path) -> None:
     with _images_dir(tmp_path, "thaw-async") as images_dir:
         try:
             try:
-                await goblins.freeze_async(proc.pid, images_dir, leave_running=False)
+                await asyncio.wait_for(
+                    goblins.freeze_async(proc.pid, images_dir, leave_running=False, shell_job=False),
+                    timeout=10,
+                )
             except RuntimeError as exc:
                 log_tail = _read_log_tail_as_root(images_dir / f"goblin-freeze.{proc.pid}.log")
                 pytest.skip(f"CRIU freeze failed in this environment: {exc}\nLog tail:\n{log_tail}")
@@ -58,22 +83,22 @@ async def test_goblin_thaw_async_live(tmp_path: Path) -> None:
             proc.wait(timeout=5)
 
             try:
-                thawed = await goblins.thaw_async(images_dir)
+                thawed = await asyncio.wait_for(
+                    goblins.thaw_async(images_dir, shell_job=False, detach=True),
+                    timeout=10,
+                )
             except RuntimeError as exc:
                 if "closefrom_override" in str(exc):
                     pytest.skip(str(exc))
                 raise
 
-            ready = await thawed.stdout.readline()
-            assert b"ready" in ready.lower()
-
             message = b"ping from thaw\n"
-            thawed.stdin.write(message)
-            await thawed.stdin.drain()
-            response = await thawed.stdout.readline()
+            await _async_write_line(thawed.stdin, message)
+            response = await _async_read_line(thawed.stdout)
             assert message.strip().upper() in response.strip().upper()
 
+            await _wait_for_pidfile(thawed.pidfile)
             os.kill(await thawed.read_pidfile(), signal.SIGTERM)
-            await thawed.close()
+            await asyncio.wait_for(thawed.close(), timeout=5)
         finally:
             _terminate(proc)

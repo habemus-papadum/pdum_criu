@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import json
 import logging
@@ -265,8 +266,8 @@ class AsyncGoblinProcess:
     async def read_pidfile(self) -> int:
         """Asynchronously return the PID recorded by CRIU."""
 
-        content = await asyncio.to_thread(self.pidfile.read_text)
-        return int(content.strip())
+        data = await _read_file_async(self.pidfile)
+        return int(data.decode("utf-8").strip())
 
     async def close(self) -> None:
         self.stdin.close()
@@ -958,3 +959,42 @@ async def _make_writer_from_fd(fd: int) -> asyncio.StreamWriter:
     write_file = os.fdopen(fd, "wb", buffering=0, closefd=False)
     transport, protocol = await loop.connect_write_pipe(streams.FlowControlMixin, write_file)
     return asyncio.StreamWriter(transport, protocol, None, loop)
+
+
+async def _read_file_async(path: Path, chunk_size: int = 65536) -> bytes:
+    loop = asyncio.get_running_loop()
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        chunks: list[bytes] = []
+        while True:
+            try:
+                chunk = os.read(fd, chunk_size)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                continue
+            except BlockingIOError:
+                await _wait_for_fd_readable(loop, fd)
+            except InterruptedError:
+                continue
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
+async def _wait_for_fd_readable(loop: asyncio.AbstractEventLoop, fd: int) -> None:
+    fut: asyncio.Future[None] = loop.create_future()
+
+    def _resume() -> None:
+        loop.remove_reader(fd)
+        if not fut.done():
+            fut.set_result(None)
+
+    loop.add_reader(fd, _resume)
+    try:
+        await fut
+    finally:
+        if not fut.done():
+            fut.cancel()
+        with contextlib.suppress(Exception):
+            loop.remove_reader(fd)

@@ -5,6 +5,7 @@ import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -412,3 +413,28 @@ def test_thaw_async_success(monkeypatch, tmp_path: Path) -> None:
         assert await proc.read_pidfile() == 6666
 
     asyncio.run(_exercise())
+
+
+@pytest.mark.asyncio
+async def test_async_goblin_process_read_pidfile(tmp_path: Path) -> None:
+    pidfile = tmp_path / "pid"
+    pidfile.write_text("4242\n", encoding="utf-8")
+    proc = goblins.AsyncGoblinProcess(
+        helper_pid=111,
+        stdin=cast(asyncio.StreamWriter, object()),
+        stdout=cast(asyncio.StreamReader, object()),
+        stderr=cast(asyncio.StreamReader, object()),
+        images_dir=tmp_path,
+        log_path=tmp_path / "log",
+        pidfile=pidfile,
+    )
+    assert await proc.read_pidfile() == 4242
+
+
+@pytest.mark.asyncio
+async def test_read_file_async_reads_entire_file(tmp_path: Path) -> None:
+    payload = b"\x00hello goblin\xffmore-bytes"
+    blob = tmp_path / "blob.bin"
+    blob.write_bytes(payload)
+    data = await goblins._read_file_async(blob, chunk_size=4)
+    assert data == payload

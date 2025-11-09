@@ -40,7 +40,7 @@ jobs:
             curl -fsSL https://download.opensuse.org/repositories/devel:tools:/criu/xUbuntu_24.04/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/devel_tools_criu.gpg > /dev/null
           fi
           sudo apt-get update
-          sudo apt-get install -y criu procps tmux
+          sudo apt-get install -y criu procps
 
       - name: Project Setup
         run: ./scripts/setup.sh

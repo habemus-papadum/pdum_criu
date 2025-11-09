@@ -22,7 +22,7 @@ docs_dir: docs
 plugins:
   - search
   - mkdocs-jupyter:
-      execute: true
+      execute: false
   - mkdocstrings:
       default_handler: python
       handlers:

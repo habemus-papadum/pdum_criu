@@ -603,7 +603,7 @@ wheels = [
 
 [[package]]
 name = "habemus-papadum-criu"
-version = "0.1.0a0"
+version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "rich" },
@@ -620,6 +620,7 @@ dev = [
     { name = "mkdocs-material" },
     { name = "mkdocstrings" },
     { name = "mkdocstrings-python" },
+    { name = "nbformat" },
     { name = "playwright" },
     { name = "pre-commit" },
     { name = "pytest" },
@@ -647,6 +648,7 @@ dev = [
     { name = "mkdocs-material", specifier = ">=9.5.0" },
     { name = "mkdocstrings", specifier = ">=0.26.1" },
     { name = "mkdocstrings-python", specifier = ">=1.11.1" },
+    { name = "nbformat", specifier = ">=5.10.4" },
     { name = "playwright", specifier = ">=1.45.0" },
     { name = "pre-commit", specifier = ">=3.7.0" },
     { name = "pytest", specifier = ">=8.0.0" },

@@ -2,14 +2,6 @@
 # See https://pre-commit.com for more information
 
 repos:
-  # Strip outputs from Jupyter notebooks
-  - repo: https://github.com/kynan/nbstripout
-    rev: 0.8.1
-    hooks:
-      - id: nbstripout
-        name: Strip notebook outputs
-        files: \.ipynb$
-
   # Basic file checks
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
@@ -31,5 +23,4 @@ repos:
         args: [--fix]
       - id: ruff-format
         name: Format Python with ruff
-
 

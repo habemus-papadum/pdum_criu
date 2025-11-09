@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import logging
 import os
 import select
 import shutil
@@ -27,23 +26,11 @@ for line in sys.stdin:
     if text == "":
         print(f"[{os.getpid()}] (noop)", flush=True)
         continue
-    if text == "exit":
-        print(f"[{os.getpid()}] exiting", flush=True)
-        break
     print(f"[{os.getpid()}] echo: {text}", flush=True)
     sys.stdout.flush()
 
-print(f"[{os.getpid()}] bye", flush=True)
+print(f"[{os.getpid()}] stdin closed, exiting", flush=True)
 """
-
-
-def _configure_logging() -> None:
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(asctime)s %(levelname)-8s %(name)s %(message)s",
-    )
-    logging.getLogger("pdum").setLevel(logging.DEBUG)
-    logging.getLogger("pdum.criu").setLevel(logging.DEBUG)
 
 
 def _write_line(writer, text: str) -> None:
@@ -79,7 +66,7 @@ def _drain(reader) -> None:
         chunk = reader.readline()
         if not chunk:
             break
-        logging.debug("stderr: %s", chunk.decode("utf-8", errors="replace").rstrip("\n"))
+        print(f"[stderr] {chunk.decode('utf-8', errors='replace').rstrip()}")
 
 
 def _launch_goblin(python: str) -> subprocess.Popen[bytes]:
@@ -93,60 +80,76 @@ def _launch_goblin(python: str) -> subprocess.Popen[bytes]:
     if proc.stdout is None or proc.stdin is None or proc.stderr is None:
         raise RuntimeError("failed to capture goblin stdio pipes")
     banner = _read_line(proc.stdout)
-    logging.info("Original goblin says: %s", banner)
+    print(f"Original goblin says: {banner}")
     return proc
 
 
+def _wait_for_pid(pid: int, timeout: float) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            print(f"Process {pid} exited")
+            return
+        time.sleep(0.1)
+    print(f"Process {pid} still running after {timeout:.1f}s")
+
+
 def demo(images_dir: Path, python: str, cleanup: bool) -> None:
-    logging.info("Using images directory %s", images_dir)
+    print(f"Using images directory {images_dir}")
     images_dir.mkdir(parents=True, exist_ok=True)
 
     proc = _launch_goblin(python)
     assert proc.stdin and proc.stdout
 
     _write_line(proc.stdin, "hello before freeze")
-    logging.info("Original response: %s", _read_line(proc.stdout))
+    print(f"Original response: {_read_line(proc.stdout)}")
 
-    log_path = goblins.freeze(proc.pid, images_dir, leave_running=True, verbosity=4)
-    logging.info("Goblin frozen into %s (log %s)", images_dir, log_path)
+    log_path = goblins.freeze(proc.pid, images_dir, leave_running=True, verbosity=4, shell_job=False)
+    print(f"Goblin frozen into {images_dir} (log {log_path})")
 
-    thawed = goblins.thaw(images_dir)
-    logging.info("Thawed goblin PID=%s (original PID=%s)", thawed.pid, proc.pid)
+    thawed = goblins.thaw(images_dir, shell_job=False)
+    print(f"Thawed goblin PID={thawed.pid} (original PID={proc.pid}, restore helper PID={thawed.restore_pid})")
 
     _write_line(proc.stdin, "original still alive")
-    logging.info("Original response: %s", _read_line(proc.stdout))
+    print(f"Original response: {_read_line(proc.stdout)}")
 
     _write_line(thawed.stdin, "hello from thawed client")
-    logging.info("Thawed response: %s", _read_line(thawed.stdout))
+    print(f"Thawed response: {_read_line(thawed.stdout)}")
 
     _write_line(proc.stdin, "orig second ping")
     _write_line(thawed.stdin, "thawed second ping")
-    logging.info("Original second response: %s", _read_line(proc.stdout))
-    logging.info("Thawed second response: %s", _read_line(thawed.stdout))
+    print(f"Original second response: {_read_line(proc.stdout)}")
+    print(f"Thawed second response: {_read_line(thawed.stdout)}")
 
-    _write_line(proc.stdin, "exit")
-    _write_line(thawed.stdin, "exit")
+    proc.stdin.close()
+    thawed.stdin.close()
+
     try:
-        logging.info("Original exit message: %s", _read_line(proc.stdout, timeout=2))
+        print(f"Original exit message: {_read_line(proc.stdout, timeout=2)}")
     except TimeoutError:
-        logging.warning("Original goblin did not exit on cue")
+        print("Original goblin did not exit on cue")
     try:
-        logging.info("Thawed exit message: %s", _read_line(thawed.stdout, timeout=2))
+        print(f"Thawed exit message: {_read_line(thawed.stdout, timeout=2)}")
     except TimeoutError:
-        logging.warning("Thawed goblin did not exit on cue")
+        print("Thawed goblin did not exit on cue")
 
     thawed.close()
+    if thawed.restore_pid is not None:
+        print(f"Waiting for criu-ns helper PID {thawed.restore_pid} to exit")
+        _wait_for_pid(thawed.restore_pid, timeout=5)
     proc.wait(timeout=5)
     _drain(proc.stderr)
-    logging.info("Demo complete.")
+    print("Demo complete.")
 
     if cleanup:
-        logging.info("Removing %s", images_dir)
+        print(f"Removing {images_dir}")
         shutil.rmtree(images_dir, ignore_errors=True)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Synchronous goblin freeze/thaw sanity test.")
+    parser = argparse.ArgumentParser(description="Synchronous goblin freeze/thaw sanity test.", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument(
         "--images-dir",
         type=Path,
@@ -167,7 +170,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    _configure_logging()
     args = parse_args()
     images_dir = args.images_dir.expanduser().resolve()
     cleanup = args.cleanup

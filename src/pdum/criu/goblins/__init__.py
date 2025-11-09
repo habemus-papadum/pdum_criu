@@ -11,6 +11,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+import threading
 import time
 from asyncio import streams
 from dataclasses import dataclass
@@ -46,6 +47,7 @@ def freeze(
     log_path: str | Path | None = None,
     verbosity: int = 4,
     extra_args: Iterable[str] | None = None,
+    shell_job: bool = True,
 ) -> Path:
     """Checkpoint a goblin process into the specified image directory.
 
@@ -89,6 +91,7 @@ def freeze(
         log_path=log_path,
         verbosity=verbosity,
         extra_args=extra_args,
+        shell_job=shell_job,
     )
 
     logger.debug("Running command: %s", shlex.join(context.command))
@@ -111,6 +114,7 @@ async def freeze_async(
     log_path: str | Path | None = None,
     verbosity: int = 4,
     extra_args: Iterable[str] | None = None,
+    shell_job: bool = True,
 ) -> Path:
     """Async variant of :func:`freeze` using asyncio subprocesses."""
 
@@ -121,6 +125,7 @@ async def freeze_async(
         log_path=log_path,
         verbosity=verbosity,
         extra_args=extra_args,
+        shell_job=shell_job,
     )
 
     logger.debug("Running command (async): %s", shlex.join(context.command))
@@ -138,6 +143,7 @@ async def freeze_async(
 @dataclass
 class GoblinProcess:
     pid: int
+    restore_pid: int | None
     stdin: io.BufferedWriter
     stdout: io.BufferedReader
     stderr: io.BufferedReader
@@ -158,6 +164,7 @@ class GoblinProcess:
 @dataclass
 class AsyncGoblinProcess:
     pid: int
+    restore_pid: int | None
     stdin: asyncio.StreamWriter
     stdout: asyncio.StreamReader
     stderr: asyncio.StreamReader
@@ -177,22 +184,26 @@ def thaw(
     *,
     extra_args: Iterable[str] | None = None,
     pidfile_timeout: float = 30.0,
+    shell_job: bool = True,
 ) -> GoblinProcess:
     """Restore a goblin synchronously and return file objects for stdio."""
 
-    context = _build_thaw_context(images_dir, extra_args=extra_args)
+    context = _build_thaw_context(images_dir, extra_args=extra_args, shell_job=shell_job)
     pipes = _prepare_stdio_pipes(context.pipe_ids)
 
+    restore_proc = _launch_criu_restore_sync(context, pipes)
     try:
-        _run_criu_restore(context, pipes)
         pid = _wait_for_pidfile(context.pidfile, timeout=pidfile_timeout)
     except Exception:
+        _terminate_process(restore_proc)
         pipes.close_parent_ends()
         raise
 
     stdin, stdout, stderr = pipes.build_sync_streams()
+    _reap_process_in_background(restore_proc)
     return GoblinProcess(
         pid=pid,
+        restore_pid=restore_proc.pid,
         stdin=stdin,
         stdout=stdout,
         stderr=stderr,
@@ -206,25 +217,29 @@ async def thaw_async(
     *,
     extra_args: Iterable[str] | None = None,
     pidfile_timeout: float = 30.0,
+    shell_job: bool = True,
 ) -> AsyncGoblinProcess:
     """Restore a goblin and expose asyncio streams."""
 
-    context = _build_thaw_context(images_dir, extra_args=extra_args)
+    context = _build_thaw_context(images_dir, extra_args=extra_args, shell_job=shell_job)
     pipes = _prepare_stdio_pipes(context.pipe_ids)
 
+    restore_proc = await _launch_criu_restore_async(context, pipes)
     try:
-        _run_criu_restore(context, pipes)
-        pid = _wait_for_pidfile(context.pidfile, timeout=pidfile_timeout)
+        pid = await _wait_for_pidfile_async(context.pidfile, timeout=pidfile_timeout)
     except Exception:
+        await _terminate_process_async(restore_proc)
         pipes.close_parent_ends()
         raise
 
     stdin_writer = await _make_writer_from_fd(pipes.parent_stdin_fd)
     stdout_reader = await _make_reader_from_fd(pipes.parent_stdout_fd)
     stderr_reader = await _make_reader_from_fd(pipes.parent_stderr_fd)
+    _schedule_async_reap(restore_proc)
 
     return AsyncGoblinProcess(
         pid=pid,
+        restore_pid=restore_proc.pid,
         stdin=stdin_writer,
         stdout=stdout_reader,
         stderr=stderr_reader,
@@ -233,7 +248,12 @@ async def thaw_async(
     )
 
 
-def _build_thaw_context(images_dir: str | Path, *, extra_args: Iterable[str] | None) -> _ThawContext:
+def _build_thaw_context(
+    images_dir: str | Path,
+    *,
+    extra_args: Iterable[str] | None,
+    shell_job: bool,
+) -> _ThawContext:
     images = Path(images_dir).expanduser().resolve()
     if not images.exists():
         raise RuntimeError(f"images directory does not exist: {images}")
@@ -253,7 +273,6 @@ def _build_thaw_context(images_dir: str | Path, *, extra_args: Iterable[str] | N
         criu_ns = utils.ensure_criu_ns(verbose=False, raise_=True)
         restore_cmd = [criu_ns]
     except Exception:
-        criu_ns = None
         criu_bin = utils.ensure_criu(verbose=False, raise_=True)
         restore_cmd = [criu_bin]
 
@@ -266,8 +285,9 @@ def _build_thaw_context(images_dir: str | Path, *, extra_args: Iterable[str] | N
         str(log_path),
         "--pidfile",
         str(pidfile),
-        "--shell-job",
     ]
+    if shell_job:
+        command.append("--shell-job")
 
     if extra_args:
         command.extend(extra_args)
@@ -291,6 +311,7 @@ class _FreezeContext:
         pid: int,
         leave_running: bool,
         pipe_ids: dict[str, str],
+        shell_job: bool,
     ) -> None:
         self.command = command
         self.log_path = log_path
@@ -298,6 +319,7 @@ class _FreezeContext:
         self.pid = pid
         self.leave_running = leave_running
         self.pipe_ids = pipe_ids
+        self.shell_job = shell_job
 
 
 @dataclass
@@ -318,6 +340,7 @@ def _build_freeze_context(
     log_path: str | Path | None,
     verbosity: int,
     extra_args: Iterable[str] | None,
+    shell_job: bool,
 ) -> _FreezeContext:
     utils.ensure_linux()
     utils.ensure_sudo(verbose=False, raise_=True)
@@ -348,8 +371,10 @@ def _build_freeze_context(
         "-o",
         str(resolved_log),
         f"-v{verbosity}",
-        "--shell-job",
     ]
+
+    if shell_job:
+        command.append("--shell-job")
 
     if leave_running:
         command.append("--leave-running")
@@ -357,7 +382,7 @@ def _build_freeze_context(
     if extra_args:
         command.extend(extra_args)
 
-    return _FreezeContext(command, resolved_log, images_dir, pid, leave_running, pipe_ids)
+    return _FreezeContext(command, resolved_log, images_dir, pid, leave_running, pipe_ids, shell_job)
 def _handle_freeze_result(returncode: int, log_path: Path) -> None:
     if returncode == 0:
         return
@@ -576,21 +601,48 @@ def _make_inheritable(fd: int) -> None:
     os.set_inheritable(fd, True)
 
 
-def _run_criu_restore(context: _ThawContext, pipes: _StdioPipes) -> None:
+def _launch_criu_restore_sync(context: _ThawContext, pipes: _StdioPipes) -> subprocess.Popen[bytes]:
     utils.ensure_sudo_closefrom()
+    command = _build_restore_command_with_inherit(context, pipes)
+    child_fds = pipes.child_stdio_fds
+    try:
+        proc = subprocess.Popen(command, pass_fds=child_fds)
+    except Exception:
+        pipes.close_parent_ends()
+        pipes.close_child_fds()
+        raise
+
+    _ensure_log_readable(context.log_path)
+    pipes.close_child_fds()
+    return proc
+
+
+async def _launch_criu_restore_async(
+    context: _ThawContext,
+    pipes: _StdioPipes,
+) -> asyncio.subprocess.Process:
+    utils.ensure_sudo_closefrom()
+    command = _build_restore_command_with_inherit(context, pipes)
+    child_fds = pipes.child_stdio_fds
+    try:
+        proc = await asyncio.create_subprocess_exec(*command, pass_fds=child_fds)
+    except Exception:
+        pipes.close_parent_ends()
+        pipes.close_child_fds()
+        raise
+
+    _ensure_log_readable(context.log_path)
+    pipes.close_child_fds()
+    return proc
+
+
+def _build_restore_command_with_inherit(context: _ThawContext, pipes: _StdioPipes) -> list[str]:
     command = [context.sudo_cmd, "-n"]
     child_fds = pipes.child_stdio_fds
     if child_fds:
         closefrom = max(child_fds) + 1
         command += ["-C", str(closefrom)]
-    command += context.restore_cmd + pipes.inherit_args
-
-    result = subprocess.run(command, check=False, pass_fds=child_fds)
-    _ensure_log_readable(context.log_path)
-    if result.returncode != 0:
-        pipes.close_parent_ends()
-        _handle_thaw_failure(result.returncode, context.log_path)
-    pipes.close_child_fds()
+    return command + context.restore_cmd + pipes.inherit_args
 
 
 def _handle_thaw_failure(returncode: int, log_path: Path) -> None:
@@ -620,6 +672,82 @@ def _ensure_log_readable(log_path: Path) -> None:
     subprocess.run([sudo_path, "-n", "chmod", "0644", str(log_path)], check=False)
 
 
+def _terminate_process(proc: subprocess.Popen[bytes]) -> None:
+    if proc.poll() is not None:
+        _reap_process(proc)
+        return
+    try:
+        proc.terminate()
+    except OSError:
+        pass
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+            proc.wait(timeout=1)
+        except Exception:
+            pass
+
+
+async def _terminate_process_async(proc: asyncio.subprocess.Process) -> None:
+    if proc.returncode is not None:
+        return
+    try:
+        proc.terminate()
+    except ProcessLookupError:
+        return
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=2)
+        return
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            return
+        try:
+            await proc.wait()
+        except Exception:
+            pass
+
+
+def _reap_process(proc: subprocess.Popen[bytes]) -> None:
+    try:
+        proc.wait(timeout=0)
+    except subprocess.TimeoutExpired:
+        pass
+    except Exception:
+        pass
+
+
+def _reap_process_in_background(proc: subprocess.Popen[bytes]) -> None:
+    if proc.poll() is not None:
+        _reap_process(proc)
+        return
+
+    def _wait() -> None:
+        try:
+            proc.wait()
+        except Exception:
+            pass
+
+    threading.Thread(target=_wait, daemon=True).start()
+
+
+def _schedule_async_reap(proc: asyncio.subprocess.Process) -> None:
+    if proc.returncode is not None:
+        return
+
+    async def _wait() -> None:
+        try:
+            await proc.wait()
+        except Exception:
+            pass
+
+    loop = asyncio.get_running_loop()
+    loop.create_task(_wait())
+
+
 def _wait_for_pidfile(pidfile: Path, timeout: float = 5.0) -> int:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -628,6 +756,17 @@ def _wait_for_pidfile(pidfile: Path, timeout: float = 5.0) -> int:
             if content.isdigit():
                 return int(content)
         time.sleep(0.02)
+    raise RuntimeError(f"Timed out waiting for CRIU pidfile {pidfile}")
+
+
+async def _wait_for_pidfile_async(pidfile: Path, timeout: float = 5.0) -> int:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if pidfile.exists():
+            content = pidfile.read_text().strip()
+            if content.isdigit():
+                return int(content)
+        await asyncio.sleep(0.02)
     raise RuntimeError(f"Timed out waiting for CRIU pidfile {pidfile}")
 
 

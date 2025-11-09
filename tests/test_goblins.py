@@ -166,10 +166,12 @@ def test_thaw_success(monkeypatch, tmp_path: Path) -> None:
 
     proc = goblins.thaw(images_dir)
 
-    assert proc.pid == 7777
-    assert proc.restore_pid == 5555
+    assert proc.helper_pid == 5555
+    assert proc.log_path == images_dir / "goblin-thaw.12345.log"
+    assert proc.pidfile == images_dir / "goblin-thaw.12345.pid"
     assert "--shell-job" in called["cmd"]
     assert any("--inherit-fd" in arg for arg in called["cmd"] if isinstance(arg, str))
+    assert proc.read_pidfile() == 7777
     proc.stdin.close()
     proc.stdout.close()
     proc.stderr.close()
@@ -283,67 +285,66 @@ def test_thaw_without_shell_job(monkeypatch, tmp_path: Path) -> None:
 
     proc = goblins.thaw(images_dir, shell_job=False)
     assert "--shell-job" not in captured["cmd"]
-    assert proc.pid == 6500
+    assert proc.read_pidfile() == 6500
 
 
-def test_thaw_pidfile_timeout_override(monkeypatch, tmp_path: Path) -> None:
+def test_thaw_allows_custom_log_and_pidfile(monkeypatch, tmp_path: Path) -> None:
     images_dir = tmp_path / "img"
     images_dir.mkdir()
     _write_meta(images_dir)
 
+    log_override = tmp_path / "logs" / "restore.log"
+    pid_override = tmp_path / "state" / "restore.pid"
+
     monkeypatch.setattr(goblins.utils, "resolve_command", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(goblins.utils, "ensure_criu", lambda **_: "/usr/bin/criu")
     monkeypatch.setattr(goblins.utils, "ensure_criu_ns", lambda **_: "/usr/sbin/criu-ns")
-    monkeypatch.setattr(
-        goblins,
-        "_prepare_stdio_pipes",
-        lambda pipe_ids: SimpleNamespace(
-            child_stdio_fds=[],
-            inherit_args=[],
-            close_parent_ends=lambda: None,
-            close_child_fds=lambda: None,
-            build_sync_streams=lambda: (io.BytesIO(), io.BytesIO(), io.BytesIO()),
-            parent_stdin_fd=3,
-            parent_stdout_fd=4,
-            parent_stderr_fd=5,
-        ),
-    )
     monkeypatch.setattr(goblins.utils, "ensure_sudo_closefrom", lambda: True)
-    class FakeRestoreProc:
+
+    class FakePipes:
         def __init__(self):
-            self.pid = 1234
-            self._returncode = None
+            self.child_stdio_fds = []
+            self.inherit_args = []
+            self.parent_stdin_fd = 3
+            self.parent_stdout_fd = 4
+            self.parent_stderr_fd = 5
+
+        def close_parent_ends(self):
+            pass
+
+        def close_child_fds(self):
+            pass
+
+        def build_sync_streams(self):
+            return io.BytesIO(), io.BytesIO(), io.BytesIO()
+
+    monkeypatch.setattr(goblins, "_prepare_stdio_pipes", lambda *_: FakePipes())
+
+    class FakeProc:
+        def __init__(self):
+            self.pid = 4321
 
         def poll(self):
-            return self._returncode
-
-        def wait(self, timeout=None):
-            self._returncode = 0
             return 0
 
-        def terminate(self):
-            self._returncode = -15
+        def wait(self, timeout=None):
+            return 0
 
-        def kill(self):
-            self._returncode = -9
+    def fake_popen(cmd, pass_fds, **kwargs):
+        pid_override.write_text("9001")
+        return FakeProc()
 
-    monkeypatch.setattr(
-        goblins,
-        "_launch_criu_restore_sync",
-        lambda context, pipes: FakeRestoreProc(),
+    monkeypatch.setattr(goblins.subprocess, "Popen", fake_popen)
+
+    proc = goblins.thaw(
+        images_dir,
+        shell_job=False,
+        log_path=log_override,
+        pidfile=pid_override,
     )
-
-    recorded = {}
-
-    def fake_wait(pidfile, timeout):
-        recorded["timeout"] = timeout
-        return 9999
-
-    monkeypatch.setattr(goblins, "_wait_for_pidfile", fake_wait)
-    proc = goblins.thaw(images_dir, pidfile_timeout=42.5)
-    assert proc.pid == 9999
-    assert proc.restore_pid == 1234
-    assert recorded["timeout"] == 42.5
+    assert proc.log_path == log_override.resolve()
+    assert proc.pidfile == pid_override.resolve()
+    assert proc.read_pidfile() == 9001
 
 
 def test_thaw_async_success(monkeypatch, tmp_path: Path) -> None:
@@ -403,7 +404,11 @@ def test_thaw_async_success(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(goblins, "_make_writer_from_fd", fake_writer)
     monkeypatch.setattr(goblins, "_make_reader_from_fd", fake_reader)
 
-    proc = asyncio.run(goblins.thaw_async(images_dir))
-    assert proc.pid == 6666
-    assert proc.restore_pid == 4242
-    assert proc.stdin.startswith("writer-")
+    async def _exercise():
+        proc = await goblins.thaw_async(images_dir)
+        assert proc.helper_pid == 4242
+        assert proc.stdin.startswith("writer-")
+        assert proc.pidfile == images_dir / "goblin-thaw.54321.pid"
+        assert await proc.read_pidfile() == 6666
+
+    asyncio.run(_exercise())

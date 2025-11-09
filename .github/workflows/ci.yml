@@ -32,7 +32,7 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install CRIU and procps
+      - name: Install apt dependencies
         run: |
           source /etc/os-release
           if [ "${VERSION_ID}" = "24.04" ]; then
@@ -40,7 +40,7 @@ jobs:
             curl -fsSL https://download.opensuse.org/repositories/devel:tools:/criu/xUbuntu_24.04/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/devel_tools_criu.gpg > /dev/null
           fi
           sudo apt-get update
-          sudo apt-get install -y criu procps
+          sudo apt-get install -y criu procps tmux
 
       - name: Project Setup
         run: ./scripts/setup.sh

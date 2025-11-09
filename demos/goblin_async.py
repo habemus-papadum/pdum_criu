@@ -58,6 +58,21 @@ async def _launch_goblin(python: str) -> asyncio.subprocess.Process:
     return proc
 
 
+async def _wait_for_pidfile(pidfile: Path, timeout: float = 5.0) -> None:
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    while True:
+        try:
+            int(pidfile.read_text().strip())
+            return
+        except (FileNotFoundError, ValueError):
+            pass
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            raise TimeoutError(f"timed out waiting for pidfile {pidfile}")
+        await asyncio.sleep(min(0.05, remaining))
+
+
 async def demo(images_dir: Path, python: str, cleanup: bool) -> None:
     print(f"Using images directory {images_dir}")
     images_dir.mkdir(parents=True, exist_ok=True)
@@ -72,7 +87,9 @@ async def demo(images_dir: Path, python: str, cleanup: bool) -> None:
     print(f"Goblin frozen into {images_dir}")
 
     thawed = await goblins.thaw_async(images_dir, shell_job=False, detach=True)
-    print(f"Thawed goblin PID={thawed.pid} (original PID={proc.pid})")
+    await _wait_for_pidfile(thawed.pidfile)
+    thawed_pid = await thawed.read_pidfile()
+    print(f"Thawed goblin PID={thawed_pid} (original PID={proc.pid})")
 
     await _write_line(proc.stdin, "original still alive")
     print(f"Original response: {await _read_line(proc.stdout)}")

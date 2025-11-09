@@ -90,8 +90,19 @@ def _wait_for_pid(pid: int, timeout: float) -> None:
         except OSError:
             print(f"Process {pid} exited")
             return
-        time.sleep(0.1)
+    time.sleep(0.1)
     print(f"Process {pid} still running after {timeout:.1f}s")
+
+
+def _wait_for_pidfile(pidfile: Path, timeout: float = 5.0) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            int(pidfile.read_text().strip())
+            return
+        except (FileNotFoundError, ValueError):
+            time.sleep(0.02)
+    raise TimeoutError(f"timed out waiting for pidfile {pidfile}")
 
 
 def demo(images_dir: Path, python: str, cleanup: bool) -> None:
@@ -108,9 +119,9 @@ def demo(images_dir: Path, python: str, cleanup: bool) -> None:
     print(f"Goblin frozen into {images_dir} (log {log_path})")
 
     thawed = goblins.thaw(images_dir, shell_job=False, detach=True)
-    print(
-        f"Thawed goblin PID={thawed.pid} (original PID={proc.pid}, restore helper PID={thawed.restore_pid})"
-    )
+    _wait_for_pidfile(thawed.pidfile)
+    thawed_pid = thawed.read_pidfile()
+    print(f"Thawed goblin PID={thawed_pid} (original PID={proc.pid}, restore helper PID={thawed.helper_pid})")
 
     _write_line(proc.stdin, "original still alive")
     print(f"Original response: {_read_line(proc.stdout)}")
@@ -136,9 +147,9 @@ def demo(images_dir: Path, python: str, cleanup: bool) -> None:
         print("Thawed goblin did not exit on cue")
 
     thawed.close()
-    if thawed.restore_pid is not None:
-        print(f"Waiting for criu-ns helper PID {thawed.restore_pid} to exit")
-        _wait_for_pid(thawed.restore_pid, timeout=5)
+    if thawed.helper_pid is not None:
+        print(f"Waiting for criu-ns helper PID {thawed.helper_pid} to exit")
+        _wait_for_pid(thawed.helper_pid, timeout=5)
     proc.wait(timeout=5)
     _drain(proc.stderr)
     print("Demo complete.")

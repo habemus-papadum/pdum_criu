@@ -73,7 +73,7 @@ async def test_goblin_thaw_async_live(tmp_path: Path) -> None:
             response = await thawed.stdout.readline()
             assert message.strip().upper() in response.strip().upper()
 
-            os.kill(thawed.pid, signal.SIGTERM)
+            os.kill(await thawed.read_pidfile(), signal.SIGTERM)
             await thawed.close()
         finally:
             _terminate(proc)

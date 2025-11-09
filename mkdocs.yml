@@ -21,7 +21,8 @@ docs_dir: docs
 # Plugins to enable
 plugins:
   - search
-  - mkdocs-jupyter
+  - mkdocs-jupyter:
+      execute: true
   - mkdocstrings:
       default_handler: python
       handlers:

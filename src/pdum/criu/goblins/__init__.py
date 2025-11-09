@@ -67,6 +67,9 @@ def freeze(
         CRIU verbosity level (0-4). Defaults to 4 to aid troubleshooting.
     extra_args : Iterable[str], optional
         Additional CRIU arguments to append verbatim.
+    shell_job : bool, optional
+        Whether to include ``--shell-job``. Disable when the target already runs
+        detached from any controlling TTY. Defaults to True.
 
     Returns
     -------
@@ -85,6 +88,9 @@ def freeze(
         raise ValueError("PID must be a positive integer")
 
     logger.info("Freezing goblin pid %s into %s", pid, images_dir)
+
+    if pid <= 0:
+        raise ValueError("PID must be a positive integer")
 
     context = _build_freeze_context(
         pid,
@@ -125,7 +131,37 @@ async def freeze_async(
     extra_args: Iterable[str] | None = None,
     shell_job: bool = True,
 ) -> Path:
-    """Async variant of :func:`freeze` using asyncio subprocesses."""
+    """Asynchronously checkpoint a goblin process with CRIU.
+
+    Parameters
+    ----------
+    pid : int
+        PID of the goblin process to dump.
+    images_dir : str | Path
+        Directory that will store the CRIU image set.
+    leave_running : bool, optional
+        Keep the goblin alive after dumping. Defaults to True.
+    log_path : str | Path, optional
+        Path for CRIU's log file. Defaults to ``images_dir / f"goblin-freeze.{pid}.log"``.
+    verbosity : int, optional
+        CRIU verbosity level (0-4). Defaults to 4.
+    extra_args : Iterable[str], optional
+        Additional CRIU arguments to append verbatim.
+    shell_job : bool, optional
+        Whether to pass ``--shell-job`` to CRIU. Defaults to True.
+
+    Returns
+    -------
+    Path
+        Path to the CRIU log file for the dump operation.
+
+    Raises
+    ------
+    RuntimeError
+        If CRIU fails to dump the process.
+    ValueError
+        If ``pid`` is not positive.
+    """
 
     context = _build_freeze_context(
         pid,
@@ -138,6 +174,7 @@ async def freeze_async(
     )
 
     logger.debug("Running command (async): %s", shlex.join(context.command))
+    logger.info("Freezing goblin pid %s into %s (async)", pid, images_dir)
 
     process = await asyncio.create_subprocess_exec(
         *context.command,
@@ -157,16 +194,37 @@ async def freeze_async(
 
 @dataclass
 class GoblinProcess:
-    pid: int
-    restore_pid: int | None
+    """Synchronous handle returned by :func:`thaw`.
+
+    Parameters
+    ----------
+    helper_pid : int | None
+        PID of the helper process (``criu`` or ``criu-ns``) coordinating the restore.
+    stdin, stdout, stderr :
+        Binary file objects connected to the goblin's stdio pipes.
+    images_dir : Path
+        Directory that contains the CRIU image set used for this restore.
+    log_path : Path
+        Path to the CRIU restore log file.
+    pidfile : Path
+        Path CRIU populates with the restored process PID.
+    """
+
+    helper_pid: int | None
     stdin: io.BufferedWriter
     stdout: io.BufferedReader
     stderr: io.BufferedReader
     images_dir: Path
     log_path: Path
+    pidfile: Path
+
+    def read_pidfile(self) -> int:
+        """Return the PID recorded by CRIU."""
+
+        return int(self.pidfile.read_text().strip())
 
     def terminate(self, sig: int = signal.SIGTERM) -> None:
-        os.kill(self.pid, sig)
+        os.kill(self.read_pidfile(), sig)
 
     def close(self) -> None:
         for stream in (self.stdin, self.stdout, self.stderr):
@@ -178,13 +236,37 @@ class GoblinProcess:
 
 @dataclass
 class AsyncGoblinProcess:
-    pid: int
-    restore_pid: int | None
+    """Async counterpart returned by :func:`thaw_async`.
+
+    Parameters
+    ----------
+    helper_pid : int | None
+        PID of the helper process (``criu`` or ``criu-ns``).
+    stdin : asyncio.StreamWriter
+        Writable pipe towards the goblin's stdin.
+    stdout, stderr : asyncio.StreamReader
+        Readers for stdout/stderr respectively.
+    images_dir : Path
+        Directory containing the image set.
+    log_path : Path
+        CRIU restore log path.
+    pidfile : Path
+        File CRIU uses to publish the restored PID.
+    """
+
+    helper_pid: int | None
     stdin: asyncio.StreamWriter
     stdout: asyncio.StreamReader
     stderr: asyncio.StreamReader
     images_dir: Path
     log_path: Path
+    pidfile: Path
+
+    async def read_pidfile(self) -> int:
+        """Asynchronously return the PID recorded by CRIU."""
+
+        content = await asyncio.to_thread(self.pidfile.read_text)
+        return int(content.strip())
 
     async def close(self) -> None:
         self.stdin.close()
@@ -198,11 +280,41 @@ def thaw(
     images_dir: str | Path,
     *,
     extra_args: Iterable[str] | None = None,
-    pidfile_timeout: float = 30.0,
+    log_path: str | Path | None = None,
+    pidfile: str | Path | None = None,
     shell_job: bool = True,
     detach: bool = False,
 ) -> GoblinProcess:
-    """Restore a goblin synchronously and return file objects for stdio."""
+    """Restore a goblin synchronously and reconnect to its pipes.
+
+    Parameters
+    ----------
+    images_dir : str | Path
+        Directory containing the CRIU image set to restore.
+    extra_args : Iterable[str], optional
+        Additional CRIU restore arguments to append verbatim.
+    log_path : str | Path, optional
+        Override for the CRIU restore log file. Defaults to ``images_dir / goblin-thaw.<ts>.log``.
+    pidfile : str | Path, optional
+        Override for the CRIU ``--pidfile`` argument. Defaults to ``images_dir / goblin-thaw.<ts>.pid``.
+    shell_job : bool, optional
+        Whether to run CRIU with ``--shell-job`` (required if the target is attached to a TTY). Defaults to True.
+    detach : bool, optional
+        Whether to pass ``-d`` to CRIU and let it run detached from the helper. Defaults to False.
+
+    Returns
+    -------
+    GoblinProcess
+        Handle that exposes stdio pipes plus metadata (log path, pidfile, helper pid).
+        Call :meth:`GoblinProcess.read_pidfile` once CRIU writes the PID file.
+
+    Raises
+    ------
+    ValueError
+        If ``shell_job`` and ``detach`` are both True.
+    RuntimeError
+        If CRIU fails to start.
+    """
 
     if shell_job and detach:
         raise ValueError("detach=True is incompatible with shell_job=True.")
@@ -210,29 +322,24 @@ def thaw(
     context = _build_thaw_context(
         images_dir,
         extra_args=extra_args,
+        log_path=log_path,
+        pidfile=pidfile,
         shell_job=shell_job,
         detach=detach,
     )
     pipes = _prepare_stdio_pipes(context.pipe_ids)
 
     restore_proc = _launch_criu_restore_sync(context, pipes)
-    try:
-        pid = _wait_for_pidfile(context.pidfile, timeout=pidfile_timeout)
-    except Exception:
-        _terminate_process(restore_proc)
-        pipes.close_parent_ends()
-        raise
-
     stdin, stdout, stderr = pipes.build_sync_streams()
     _reap_process_in_background(restore_proc)
     return GoblinProcess(
-        pid=pid,
-        restore_pid=restore_proc.pid,
+        helper_pid=restore_proc.pid,
         stdin=stdin,
         stdout=stdout,
         stderr=stderr,
         images_dir=context.images_dir,
         log_path=context.log_path,
+        pidfile=context.pidfile,
     )
 
 
@@ -240,11 +347,41 @@ async def thaw_async(
     images_dir: str | Path,
     *,
     extra_args: Iterable[str] | None = None,
-    pidfile_timeout: float = 30.0,
+    log_path: str | Path | None = None,
+    pidfile: str | Path | None = None,
     shell_job: bool = True,
     detach: bool = False,
 ) -> AsyncGoblinProcess:
-    """Restore a goblin and expose asyncio streams."""
+    """Async variant of :func:`thaw` that returns asyncio streams.
+
+    Parameters
+    ----------
+    images_dir : str | Path
+        Directory containing the CRIU image set to restore.
+    extra_args : Iterable[str], optional
+        Additional CRIU restore arguments to append verbatim.
+    log_path : str | Path, optional
+        Override for the CRIU restore log file path.
+    pidfile : str | Path, optional
+        Override for the CRIU ``--pidfile`` argument.
+    shell_job : bool, optional
+        Whether to include ``--shell-job`` in the CRIU command. Defaults to True.
+    detach : bool, optional
+        Whether to pass ``-d`` (detached mode) to CRIU. Defaults to False.
+
+    Returns
+    -------
+    AsyncGoblinProcess
+        Handle exposing asyncio streams plus metadata about the restore. Use
+        :meth:`AsyncGoblinProcess.read_pidfile` after CRIU writes the PID file.
+
+    Raises
+    ------
+    ValueError
+        If ``shell_job`` and ``detach`` are both True.
+    RuntimeError
+        If CRIU fails to start.
+    """
 
     if shell_job and detach:
         raise ValueError("detach=True is incompatible with shell_job=True.")
@@ -252,32 +389,27 @@ async def thaw_async(
     context = _build_thaw_context(
         images_dir,
         extra_args=extra_args,
+        log_path=log_path,
+        pidfile=pidfile,
         shell_job=shell_job,
         detach=detach,
     )
     pipes = _prepare_stdio_pipes(context.pipe_ids)
 
     restore_proc = await _launch_criu_restore_async(context, pipes)
-    try:
-        pid = await _wait_for_pidfile_async(context.pidfile, timeout=pidfile_timeout)
-    except Exception:
-        await _terminate_process_async(restore_proc)
-        pipes.close_parent_ends()
-        raise
-
     stdin_writer = await _make_writer_from_fd(pipes.parent_stdin_fd)
     stdout_reader = await _make_reader_from_fd(pipes.parent_stdout_fd)
     stderr_reader = await _make_reader_from_fd(pipes.parent_stderr_fd)
     _schedule_async_reap(restore_proc)
 
     return AsyncGoblinProcess(
-        pid=pid,
-        restore_pid=restore_proc.pid,
+        helper_pid=restore_proc.pid,
         stdin=stdin_writer,
         stdout=stdout_reader,
         stderr=stderr_reader,
         images_dir=context.images_dir,
         log_path=context.log_path,
+        pidfile=context.pidfile,
     )
 
 
@@ -285,6 +417,8 @@ def _build_thaw_context(
     images_dir: str | Path,
     *,
     extra_args: Iterable[str] | None,
+    log_path: str | Path | None,
+    pidfile: str | Path | None,
     shell_job: bool,
     detach: bool,
 ) -> _ThawContext:
@@ -298,8 +432,18 @@ def _build_thaw_context(
     else:
         pipe_ids = meta["pipe_ids"]
 
-    log_path = images / f"goblin-thaw.{int(time.time())}.log"
-    pidfile = images / f"goblin-thaw.{int(time.time())}.pid"
+    timestamp = int(time.time())
+    if log_path is None:
+        resolved_log = images / f"goblin-thaw.{timestamp}.log"
+    else:
+        resolved_log = Path(log_path).expanduser().resolve()
+        resolved_log.parent.mkdir(parents=True, exist_ok=True)
+
+    if pidfile is None:
+        resolved_pidfile = images / f"goblin-thaw.{timestamp}.pid"
+    else:
+        resolved_pidfile = Path(pidfile).expanduser().resolve()
+        resolved_pidfile.parent.mkdir(parents=True, exist_ok=True)
 
     sudo_cmd = utils.resolve_command("sudo")
 
@@ -316,9 +460,9 @@ def _build_thaw_context(
         "-D",
         str(images),
         "-o",
-        str(log_path),
+        str(resolved_log),
         "--pidfile",
-        str(pidfile),
+        str(resolved_pidfile),
     ]
     if shell_job:
         command.append("--shell-job")
@@ -330,10 +474,10 @@ def _build_thaw_context(
 
     return _ThawContext(
         restore_cmd=command,
-        log_path=log_path,
+        log_path=resolved_log,
         images_dir=images,
         pipe_ids=pipe_ids,
-        pidfile=pidfile,
+        pidfile=resolved_pidfile,
         sudo_cmd=sudo_cmd,
     )
 
@@ -798,26 +942,6 @@ def _schedule_async_reap(proc: asyncio.subprocess.Process) -> None:
     loop.create_task(_wait())
 
 
-def _wait_for_pidfile(pidfile: Path, timeout: float = 5.0) -> int:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if pidfile.exists():
-            content = pidfile.read_text().strip()
-            if content.isdigit():
-                return int(content)
-        time.sleep(0.02)
-    raise RuntimeError(f"Timed out waiting for CRIU pidfile {pidfile}")
-
-
-async def _wait_for_pidfile_async(pidfile: Path, timeout: float = 5.0) -> int:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if pidfile.exists():
-            content = pidfile.read_text().strip()
-            if content.isdigit():
-                return int(content)
-        await asyncio.sleep(0.02)
-    raise RuntimeError(f"Timed out waiting for CRIU pidfile {pidfile}")
 
 
 async def _make_reader_from_fd(fd: int) -> asyncio.StreamReader:

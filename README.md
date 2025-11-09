@@ -16,13 +16,13 @@ Check out the [**Tutorial notebook**](https://habemus-papadum.github.io/pdum_cri
 
 __Small creatures that live in pipes.__
 
-Goblins are minimal, self-contained processes that speak to the outside world only through standard input, standard output, and standard error. They don’t need sockets, frameworks, or APIs — just a stream in, a stream out, and a place to mutter when things go wrong.
+Goblins are minimal, self-contained processes that are in continuous dialogue with the outside world only through standard input, standard output, and standard error. They don’t need sockets, frameworks, or APIs — just a stream in, a stream out, and a place to mutter when things go wrong.
 
 This package aims to make Linux user-space checkpoint/restore (via CRIU) feel high-level: freeze a running “goblin” process without disturbing it, then replay from that checkpoint as many times as you like. 
 
 But, realistically, it’s a toolkit for folks already comfortable with Linux internals — high level helpers, but still aimed at power users who understand what CRIU is doing under the hood -- things you will break or just not work, and you will need to spelunk to sort it.
 
-Inside, goblins can be as clever as they like: they can spawn threads, map files into memory, make HTTP requests, or run background jobs. None of that changes their essence. What defines a goblin is not how it thinks, but how it speaks — through the ancient UNIX tongue of stdin, stdout, and stderr.
+Inside, goblins can be as clever as they like: they can spawn threads, map files into memory, make background HTTP requests, or run background jobs. None of that changes their essence. What defines a goblin is not how it thinks, but how it speaks — through the ancient UNIX tongue of stdin, stdout, and stderr.
 
 This simplicity makes goblins easy to checkpoint, serialize, and resurrect (e.g., with CRIU). When you bring a goblin back to life, you only need to restore its three pipes — its ears, its mouth, and its voice. Everything else is internal mischief.
 

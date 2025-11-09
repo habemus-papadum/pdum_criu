@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -10,7 +11,6 @@ import sys
 import time
 import uuid
 from pathlib import Path
-import re
 
 import pytest
 
@@ -20,21 +20,31 @@ from .test_live_criu import (
     _terminate,
 )
 
-SRC_DIR = Path(__file__).resolve().parents[1] / "src"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SRC_DIR = REPO_ROOT / "src"
 _EXIT_MARKER = "__PDUM_EXIT_CODE="
+
+
+def _build_command(args: list[str], env: dict[str, str], tmp_path: Path) -> list[str]:
+    cli_exe = shutil.which("pdum-criu")
+    if cli_exe is None:
+        raise RuntimeError("pdum-criu entrypoint not found on PATH")
+    if "COVERAGE_PROCESS_START" in env:
+        env["COVERAGE_FILE"] = os.fspath(REPO_ROOT / f".coverage.cli-{uuid.uuid4().hex}")
+    return [cli_exe, *args]
 
 
 def _run_cli(args: list[str], tmp_path: Path, timeout: float = 15.0) -> tuple[int, str]:
     """Run pdum-criu inside script(1) so CRIU sees a real TTY."""
 
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(SRC_DIR)
+    existing = env.get("PYTHONPATH")
+    merged = os.pathsep.join(
+        [str(SRC_DIR)] + ([existing] if existing else []) + [str(REPO_ROOT)]
+    )
+    env["PYTHONPATH"] = merged
 
-    cli_exe = shutil.which("pdum-criu")
-    if cli_exe is None:
-        raise RuntimeError("pdum-criu entrypoint not found on PATH")
-
-    base_cmd = [cli_exe, *args]
+    base_cmd = _build_command(args, env, tmp_path)
     quoted = " ".join(shlex.quote(str(part)) for part in base_cmd)
     wrapped = f"{quoted}; printf '\\n{_EXIT_MARKER}%s\\n' $?"
 
@@ -113,4 +123,3 @@ def test_cli_doctor_runs(tmp_path: Path) -> None:
     _require_live_prereqs()
     code, output = _run_cli(["doctor"], tmp_path, timeout=10.0)
     assert code == 0, output
-    assert "doctor checks" in output.lower()

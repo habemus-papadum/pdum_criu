@@ -130,8 +130,9 @@ uv run pytest tests/test_example.py
 uv run pytest tests/test_example.py::test_version
 
 # Run tests with coverage
-uv run pytest --cov=src/pdum/criu --cov-report=xml --cov-report=term
+./scripts/coverage.sh
 ```
+This wrapper exports `COVERAGE_PROCESS_START`, runs `pytest` under `coverage`, combines the generated `.coverage.*` shards (including those from CLI subprocesses), and writes both the XML and terminal reports. Pass additional pytest arguments after the script to scope the run (for example, `./scripts/coverage.sh tests/test_live_cli.py`).
 ### Live testing
 
 To run the end-to-end CRIU test locally (requires Linux, CRIU, `pgrep`, and password-less `sudo`):

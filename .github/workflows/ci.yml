@@ -50,7 +50,7 @@ jobs:
         run: uv run ruff check .
 
       - name: Run Tests with Coverage
-        run: uv run pytest --cov=src/pdum/criu --cov-report=xml --cov-report=term
+        run: ./scripts/coverage.sh
 
 
       - name: Temporarily disable git hooks for coverage action

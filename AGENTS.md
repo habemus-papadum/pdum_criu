@@ -8,12 +8,16 @@ This is a Python library called `criu` (package name: `criu`, module name: `pdum
 
 The project uses a modern Python toolchain with UV for dependency management.
 
+
+** REFER to [README.md](README.md) for more details!** 
+
 ## Documentation Style
 
 - Assume readers are comfortable with Linux internals and CRIU concepts; no beginner primers.
 - Prioritize brevity and actionable facts. Show commands/configs directly, minimal narrative.
 - When documenting CLI or workflows, lead with the command snippet, then a one-line explanation if needed.
 - Favor tables or bullet lists over paragraphs when it reduces scanning time.
+- USE NUMPY DOC-STRING Format
 
 ## Important Rules
 
@@ -143,15 +147,3 @@ The project uses GitHub Actions for CI (`.github/workflows/ci.yml`):
 - Runs unit tests with coverage reporting
 - Posts coverage report as a PR comment
 
-### Release Process
-Releases are managed by the `./scripts/release.sh` script (HUMANS ONLY):
-1. Validates git repo is clean
-2. Checks version has `-alpha` suffix
-3. Runs all validation (tests, linting)
-4. Strips `-alpha` from version for release
-5. Creates release commit and tag
-6. Publishes to PyPI
-7. Creates GitHub release
-8. Bumps to next development version with `-alpha`
-
-The release script expects versions to follow the pattern: `X.Y.Z-alpha` → `X.Y.Z` → `X.Y.(Z+1)-alpha`

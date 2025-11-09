@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import subprocess
@@ -11,8 +12,6 @@ from collections import deque
 from pathlib import Path
 from shutil import which
 from typing import Any
-
-from rich import print as rich_print
 
 __all__ = [
     "resolve_command",
@@ -32,6 +31,9 @@ __all__ = [
 _ENV_PREFIX = "PDUM_CRIU_"
 _SUDO_CLOSEFROM_SUPPORTED: bool | None = None
 _SUDO_CLOSEFROM_ERROR: str | None = None
+
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
 
 
 def resolve_command(executable: str) -> str:
@@ -99,10 +101,11 @@ def ensure_sudo(*, verbose: bool = True, raise_: bool = False, **kwargs: Any) ->
         sudo_cmd = resolve_command("sudo")
         true_cmd = resolve_command("true")
     except (FileNotFoundError, ValueError) as exc:
+        message = f"Unable to locate sudo/true commands: {exc}"
         if verbose:
-            rich_print(f"[bold red]Unable to locate sudo/true commands:[/] {exc}")
+            logger.warning(message)
         if raise_flag:
-            raise
+            raise RuntimeError(message) from exc
         return False
 
     try:
@@ -113,22 +116,23 @@ def ensure_sudo(*, verbose: bool = True, raise_: bool = False, **kwargs: Any) ->
             stderr=subprocess.DEVNULL,
         )
     except OSError as exc:
+        message = f"Failed to execute sudo: {exc}"
         if verbose:
-            rich_print(f"[bold red]Failed to execute sudo:[/] {exc}")
+            logger.warning(message)
         if raise_flag:
-            raise
+            raise RuntimeError(message) from exc
         return False
 
     if result.returncode == 0:
         return True
 
+    user = os.environ.get("USER", "your-user")
+    message = (
+        "Password-less sudo is required to continue.\n"
+        f"Tip: run 'sudo visudo' and add '{user} ALL=(ALL) NOPASSWD:ALL'."
+    )
     if verbose:
-        user = os.environ.get("USER", "your-user")
-        rich_print(
-            "[bold red]Password-less sudo is required to continue.[/]\n"
-            "[bold yellow]Tip:[/] run [bold cyan]sudo visudo[/] and add the following line:\n"
-            f"    [green]{user} ALL=(ALL) NOPASSWD:ALL[/]"
-        )
+        logger.warning(message)
 
     if raise_flag:
         raise RuntimeError("Password-less sudo is required for pdum-criu operations.")
@@ -141,7 +145,7 @@ def ensure_criu(*, verbose: bool = True, raise_: bool = False, **kwargs: Any) ->
     raise_flag = _pop_raise_flag(kwargs, raise_)
     return _ensure_tool(
         "criu",
-        "Install CRIU on Ubuntu with [bold cyan]sudo apt update && sudo apt install -y criu[/].",
+        "Install CRIU on Ubuntu with 'sudo apt update && sudo apt install -y criu'.",
         verbose=verbose,
         raise_flag=raise_flag,
     )
@@ -153,7 +157,7 @@ def ensure_criu_ns(*, verbose: bool = True, raise_: bool = False, **kwargs: Any)
     raise_flag = _pop_raise_flag(kwargs, raise_)
     return _ensure_tool(
         "criu-ns",
-        "Install the CRIU tools on Ubuntu with [bold cyan]sudo apt install -y criu[/].",
+        "Install the CRIU tools on Ubuntu with 'sudo apt install -y criu'.",
         verbose=verbose,
         raise_flag=raise_flag,
     )
@@ -165,7 +169,7 @@ def ensure_pgrep(*, verbose: bool = True, raise_: bool = False, **kwargs: Any) -
     raise_flag = _pop_raise_flag(kwargs, raise_)
     return _ensure_tool(
         "pgrep",
-        "Install pgrep via the procps package on Ubuntu: [bold cyan]sudo apt install -y procps[/].",
+        "Install pgrep via the procps package on Ubuntu: 'sudo apt install -y procps'.",
         verbose=verbose,
         raise_flag=raise_flag,
     )
@@ -232,14 +236,14 @@ def _ensure_tool(executable: str, instructions: str, *, verbose: bool, raise_fla
     try:
         return resolve_command(executable)
     except (FileNotFoundError, ValueError) as exc:
+        message = (
+            f"{executable} not found: {exc}. {instructions} "
+            f"Override via {_env_var_name(executable)} if installed elsewhere."
+        )
         if verbose:
-            rich_print(
-                f"[bold red]{executable} not found:[/] {exc}\n"
-                f"{instructions}\n"
-                f"Override via [bold yellow]{_env_var_name(executable)}[/] if installed elsewhere."
-            )
+            logger.warning(message)
         if raise_flag:
-            raise
+            raise RuntimeError(message) from exc
         return None
 
 

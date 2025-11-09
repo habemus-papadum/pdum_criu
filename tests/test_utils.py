@@ -66,11 +66,11 @@ def test_ensure_sudo_success(monkeypatch) -> None:
         "run",
         lambda *args, **kwargs: SimpleNamespace(returncode=0),
     )
-    printed: list[str] = []
-    monkeypatch.setattr(utils, "rich_print", lambda message: printed.append(message))
+    warnings: list[str] = []
+    monkeypatch.setattr(utils, "logger", SimpleNamespace(warning=lambda msg: warnings.append(msg)))
 
     assert utils.ensure_sudo()
-    assert printed == []
+    assert warnings == []
 
 
 def test_ensure_sudo_failure_prints_message(monkeypatch) -> None:
@@ -82,11 +82,11 @@ def test_ensure_sudo_failure_prints_message(monkeypatch) -> None:
         "run",
         lambda *args, **kwargs: SimpleNamespace(returncode=1),
     )
-    printed: list[str] = []
-    monkeypatch.setattr(utils, "rich_print", lambda message: printed.append(message))
+    warnings: list[str] = []
+    monkeypatch.setattr(utils, "logger", SimpleNamespace(warning=lambda msg: warnings.append(msg)))
 
     assert not utils.ensure_sudo()
-    assert any("Password-less sudo" in msg for msg in printed)
+    assert any("Password-less sudo" in msg for msg in warnings)
 
 
 def test_ensure_sudo_missing_command(monkeypatch) -> None:
@@ -96,11 +96,11 @@ def test_ensure_sudo_missing_command(monkeypatch) -> None:
         raise FileNotFoundError("missing sudo")
 
     monkeypatch.setattr(utils, "resolve_command", _raise)
-    printed: list[str] = []
-    monkeypatch.setattr(utils, "rich_print", lambda message: printed.append(message))
+    warnings: list[str] = []
+    monkeypatch.setattr(utils, "logger", SimpleNamespace(warning=lambda msg: warnings.append(msg)))
 
     assert not utils.ensure_sudo()
-    assert any("Unable to locate sudo" in msg for msg in printed)
+    assert any("Unable to locate sudo" in msg for msg in warnings)
 
 
 @pytest.mark.parametrize(
@@ -116,12 +116,12 @@ def test_ensure_tools_success(monkeypatch, func_name: str, executable: str) -> N
 
     expected_path = f"/opt/{executable}"
     monkeypatch.setattr(utils, "resolve_command", lambda name: expected_path if name == executable else name)
-    printed: list[str] = []
-    monkeypatch.setattr(utils, "rich_print", lambda message: printed.append(message))
+    warnings: list[str] = []
+    monkeypatch.setattr(utils, "logger", SimpleNamespace(warning=lambda msg: warnings.append(msg)))
 
     ensure_fn = getattr(utils, func_name)
     assert ensure_fn() == expected_path
-    assert printed == []
+    assert warnings == []
 
 
 @pytest.mark.parametrize(
@@ -139,12 +139,12 @@ def test_ensure_tools_failure(monkeypatch, func_name: str, expected_snippet: str
         raise FileNotFoundError("missing binary")
 
     monkeypatch.setattr(utils, "resolve_command", _raise)
-    printed: list[str] = []
-    monkeypatch.setattr(utils, "rich_print", lambda message: printed.append(message))
+    warnings: list[str] = []
+    monkeypatch.setattr(utils, "logger", SimpleNamespace(warning=lambda msg: warnings.append(msg)))
 
     ensure_fn = getattr(utils, func_name)
     assert ensure_fn() is None
-    assert any(expected_snippet in msg for msg in printed)
+    assert any(expected_snippet in msg for msg in warnings)
 
 
 def _configure_fake_pgrep(monkeypatch, stdout: str, returncode: int = 0) -> None:

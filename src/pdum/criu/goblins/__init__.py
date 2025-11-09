@@ -32,6 +32,8 @@ __all__ = [
 
 
 logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
+logger.propagate = False
 _META_NAME = ".pdum_goblin_meta.json"
 
 

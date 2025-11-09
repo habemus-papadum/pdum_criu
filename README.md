@@ -7,28 +7,51 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
-Easy process freeze & thaw using [CRIU](https://criu.org/Main_Page)
+Freeze, thaw, & mulitply goblins using [CRIU](https://criu.org/Main_Page)
+
+Check out the [**Tutorial notebook**](https://habemus-papadum.github.io/pdum_criu/goblins/)  or use learn to use the CLI: `uvx habemus-papadum-criu:pdum-criu --help`
+
+
+## 🧙‍♂️ Goblins
+
+__Small creatures that live in pipes.__
+
+Goblins are minimal, self-contained processes that speak to the outside world only through standard input, standard output, and standard error. They don’t need sockets, frameworks, or APIs — just a stream in, a stream out, and a place to mutter when things go wrong.
+
+This package aims to make Linux user-space checkpoint/restore (via CRIU) feel high-level: freeze a running “goblin” process without disturbing it, then replay from that checkpoint as many times as you like. 
+
+But, realistically, it’s a toolkit for folks already comfortable with Linux internals — high level helpers, but still aimed at power users who understand what CRIU is doing under the hood -- things you will break or just not work, and you will need to spelunk to sort it.
+
+Inside, goblins can be as clever as they like: they can spawn threads, map files into memory, make HTTP requests, or run background jobs. None of that changes their essence. What defines a goblin is not how it thinks, but how it speaks — through the ancient UNIX tongue of stdin, stdout, and stderr.
+
+This simplicity makes goblins easy to checkpoint, serialize, and resurrect (e.g., with CRIU). When you bring a goblin back to life, you only need to restore its three pipes — its ears, its mouth, and its voice. Everything else is internal mischief.
+
 
 ## Installation
 ```bash
 pip install habemus-papadum-criu
 ```
 
-> **Note (Ubuntu 24.04, November 2025):** CRIU packages are not published in the default Ubuntu 24.04 (Noble) apt repositories. Install the CRIU PPA manually before running the CLI or doctor:
->
-> ```bash
-> echo 'deb http://download.opensuse.org/repositories/devel:/tools:/criu/xUbuntu_24.04/ /' | sudo tee /etc/apt/sources.list.d/devel:tools:criu.list
-> curl -fsSL https://download.opensuse.org/repositories/devel:tools:/criu/xUbuntu_24.04/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/devel_tools_criu.gpg > /dev/null
-> sudo apt update
-> sudo apt install criu
-> ```
+<details>
+<summary><strong>Note (Ubuntu 24.04, November 2025)</strong></summary>
+
+CRIU packages are not published in the default Ubuntu 24.04 (Noble) repositories. Install the CRIU PPA manually before running the CLI or doctor:
+
+```bash
+echo 'deb http://download.opensuse.org/repositories/devel:/tools:/criu/xUbuntu_24.04/ /' | sudo tee /etc/apt/sources.list.d/devel:tools:criu.list
+curl -fsSL https://download.opensuse.org/repositories/devel:tools:/criu/xUbuntu_24.04/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/devel_tools_criu.gpg > /dev/null
+sudo apt update
+sudo apt install criu
+```
+
+</details>
 
 ### Check System Capability
 
 ```bash
 uvx habemus-papadum-criu:pdum-criu doctor
 ```
-Prints a green/red summary so you can fix env.
+Prints a green/red summary so you can fix your environment .
 
 **Note:** Currently uses non-interactive `sudo` and `criu` under the hood
 
@@ -43,19 +66,8 @@ Run `pdum-criu <command> --help` for full options and examples.
 
 ## Goblins API
 
-🧙‍♂️ Goblins
-
-__Small creatures that live in pipes.__
-
-Goblins are minimal, self-contained processes that speak to the outside world only through standard input, standard output, and standard error. They don’t need sockets, frameworks, or APIs — just a stream in, a stream out, and a place to mutter when things go wrong.
-
-Inside, goblins can be as clever as they like: they can spawn threads, map files into memory, make HTTP requests, or run background jobs. None of that changes their essence. What defines a goblin is not how it thinks, but how it speaks — through the ancient UNIX tongue of stdin, stdout, and stderr.
-
-This simplicity makes goblins easy to checkpoint, serialize, and resurrect (e.g., with CRIU). When you bring a goblin back to life, you only need to restore its three pipes — its ears, its mouth, and its voice. Everything else is internal mischief.
-
 API usage starts with `pdum.criu.goblins.freeze(pid, images_dir, leave_running=True)` to checkpoint a goblin process, and `pdum.criu.goblins.thaw(...)` / `thaw_async(...)` to reconnect to it with fresh stdin/stdout/stderr pipes. Consult the module docstrings for full details.
 
-- Tutorial notebook: `docs/goblins.ipynb`. 
 
 ### Sudo configuration
 
@@ -77,6 +89,8 @@ Save, exit, and rerun the doctor to confirm the setting.
 
 - CRIU can’t restore shells spawned inside the VS Code integrated terminal—the pseudo-terminal belongs to VS Code’s pty proxy, so `criu restore` errors with `tty: No task found with sid …`. Run the target inside a real terminal (tmux/screen/gnome-terminal) or detach it with `setsid`/`script` before calling `pdum-criu shell freeze`/`shell beam`, otherwise thaw will fail (the CLI now warns/blocks by default).
 - Dumping a process that was itself restored is not yet supported. CRIU frequently aborts the second dump with mount-parent errors because the restored namespaces and bind mounts don’t line up with the current host state. Treat “freeze → thaw → freeze again” workflows as experimental; a reliable solution is still work-in-progress.
+- Most programs aren’t “goblins” out of the box. The helpers assume the workload speaks only stdin/stdout/stderr and tolerates signals/etc. For example, the stock Python REPL behaves well, but IPython does not, and some apps reuse signal handlers in surprising ways. Expect to wrap or adapt your processes; we’re still collecting patterns that make more off-the-shelf tools behave.
+- CUDA workloads are largely untested. In theory you can freeze a CUDA program as long as you don’t leave it running on the GPU, then restore it once—but multiple restores appear to fail, and we haven’t validated this path yet.
 
 
 

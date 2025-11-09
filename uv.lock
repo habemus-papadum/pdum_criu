@@ -603,7 +603,7 @@ wheels = [
 
 [[package]]
 name = "habemus-papadum-criu"
-version = "0.5.0"
+version = "0.6.0a0"
 source = { editable = "." }
 dependencies = [
     { name = "rich" },

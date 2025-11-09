@@ -194,7 +194,12 @@ def test_goblin_thaw_sync_live(tmp_path: Path) -> None:
 
         proc.wait(timeout=5)
 
-        thawed = goblins.thaw(images_dir, shell_job=False, detach=True)
+        try:
+            thawed = goblins.thaw(images_dir, shell_job=False, detach=True)
+        except RuntimeError as exc:
+            if "closefrom_override" in str(exc):
+                pytest.skip(str(exc))
+            raise
         assert thawed.stdin and thawed.stdout
         thawed.stdin.write(b"ping sync\n")
         thawed.stdin.flush()

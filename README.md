@@ -55,19 +55,7 @@ This simplicity makes goblins easy to checkpoint, serialize, and resurrect (e.g.
 
 API usage starts with `pdum.criu.goblins.freeze(pid, images_dir, leave_running=True)` to checkpoint a goblin process, and `pdum.criu.goblins.thaw(...)` / `thaw_async(...)` to reconnect to it with fresh stdin/stdout/stderr pipes. Consult the module docstrings for full details.
 
-- Tutorial notebook: `docs/goblins.ipynb`. By default the CRIU cells are skipped; set `RUN_GOBLIN_DEMO=1` when launching Jupyter to execute the live demo.
-
-### Live testing
-
-To run the end-to-end CRIU test locally (requires Linux, CRIU, `pgrep`, and password-less `sudo`):
-
-```bash
-pytest tests/test_live_criu.py -k goblin_freeze_live
-```
-
-### Known limitations
-
-- CRIU can’t restore shells spawned inside the VS Code integrated terminal—the pseudo-terminal belongs to VS Code’s pty proxy, so `criu restore` errors with `tty: No task found with sid …`. Run the target inside a real terminal (tmux/screen/gnome-terminal) or detach it with `setsid`/`script` before calling `pdum-criu shell freeze`/`shell beam`, otherwise thaw will fail (the CLI now warns/blocks by default).
+- Tutorial notebook: `docs/goblins.ipynb`. 
 
 ### Sudo configuration
 
@@ -84,6 +72,12 @@ Defaults:youruser    closefrom_override
 ```
 
 Save, exit, and rerun the doctor to confirm the setting.
+
+### Known limitations
+
+- CRIU can’t restore shells spawned inside the VS Code integrated terminal—the pseudo-terminal belongs to VS Code’s pty proxy, so `criu restore` errors with `tty: No task found with sid …`. Run the target inside a real terminal (tmux/screen/gnome-terminal) or detach it with `setsid`/`script` before calling `pdum-criu shell freeze`/`shell beam`, otherwise thaw will fail (the CLI now warns/blocks by default).
+- Dumping a process that was itself restored is not yet supported. CRIU frequently aborts the second dump with mount-parent errors because the restored namespaces and bind mounts don’t line up with the current host state. Treat “freeze → thaw → freeze again” workflows as experimental; a reliable solution is still work-in-progress.
+
 
 
 
@@ -123,6 +117,13 @@ uv run pytest tests/test_example.py::test_version
 
 # Run tests with coverage
 uv run pytest --cov=src/pdum/criu --cov-report=xml --cov-report=term
+```
+### Live testing
+
+To run the end-to-end CRIU test locally (requires Linux, CRIU, `pgrep`, and password-less `sudo`):
+
+```bash
+pytest tests/test_live_criu.py -k goblin_freeze_live
 ```
 
 ### Code Quality

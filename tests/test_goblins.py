@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import io
 import json
-import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -174,6 +173,53 @@ def test_thaw_success(monkeypatch, tmp_path: Path) -> None:
     proc.stdin.close()
     proc.stdout.close()
     proc.stderr.close()
+
+
+def test_thaw_detach_requires_no_shell_job(monkeypatch, tmp_path: Path) -> None:
+    images_dir = tmp_path / "img"
+    images_dir.mkdir()
+    _write_meta(images_dir)
+
+    monkeypatch.setattr(goblins.utils, "resolve_command", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(goblins.utils, "ensure_criu", lambda **_: "/usr/bin/criu")
+    monkeypatch.setattr(goblins.utils, "ensure_criu_ns", lambda **_: "/usr/sbin/criu-ns")
+
+    with pytest.raises(ValueError):
+        goblins.thaw(images_dir, detach=True)
+
+
+def test_thaw_detach_appends_flag(monkeypatch, tmp_path: Path) -> None:
+    images_dir = tmp_path / "img"
+    images_dir.mkdir()
+    _write_meta(images_dir)
+
+    monkeypatch.setattr(goblins.utils, "resolve_command", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(goblins.utils, "ensure_criu", lambda **_: "/usr/bin/criu")
+    monkeypatch.setattr(goblins.utils, "ensure_criu_ns", lambda **_: "/usr/sbin/criu-ns")
+    monkeypatch.setattr(goblins.utils, "ensure_sudo_closefrom", lambda: True)
+
+    class FakeProc:
+        def __init__(self):
+            self.pid = 999
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    captured = {}
+
+    def fake_popen(cmd, pass_fds, **kwargs):
+        captured["cmd"] = cmd
+        (images_dir / "goblin-thaw.1.pid").write_text("1000")
+        return FakeProc()
+
+    monkeypatch.setattr(goblins.time, "time", lambda: 1.0)
+    monkeypatch.setattr(goblins.subprocess, "Popen", fake_popen)
+
+    goblins.thaw(images_dir, shell_job=False, detach=True)
+    assert "-d" in captured["cmd"]
 
 
 def test_thaw_without_shell_job(monkeypatch, tmp_path: Path) -> None:

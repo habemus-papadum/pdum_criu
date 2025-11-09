@@ -6,10 +6,8 @@ from __future__ import annotations
 import argparse
 import os
 import select
-import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -39,12 +37,6 @@ def _write_line(writer, text: str) -> None:
     writer.flush()
 
 
-def _println(message: str) -> None:
-    prefix = "\r" if sys.stdout.isatty() else ""
-    sys.stdout.write(prefix + message + "\n")
-    sys.stdout.flush()
-
-
 def _read_line(reader, *, timeout: float = 5.0) -> str:
     fd = reader.fileno()
     deadline = time.time() + timeout
@@ -72,7 +64,7 @@ def _drain(reader) -> None:
         chunk = reader.readline()
         if not chunk:
             break
-        _println(f"[stderr] {chunk.decode('utf-8', errors='replace').rstrip()}")
+        print(f"[stderr] {chunk.decode('utf-8', errors='replace').rstrip()}")
 
 
 def _launch_goblin(python: str) -> subprocess.Popen[bytes]:
@@ -86,7 +78,7 @@ def _launch_goblin(python: str) -> subprocess.Popen[bytes]:
     if proc.stdout is None or proc.stdin is None or proc.stderr is None:
         raise RuntimeError("failed to capture goblin stdio pipes")
     banner = _read_line(proc.stdout)
-    _println(f"Original goblin says: {banner}")
+    print(f"Original goblin says: {banner}")
     return proc
 
 
@@ -96,68 +88,70 @@ def _wait_for_pid(pid: int, timeout: float) -> None:
         try:
             os.kill(pid, 0)
         except OSError:
-            _println(f"Process {pid} exited")
+            print(f"Process {pid} exited")
             return
         time.sleep(0.1)
-    _println(f"Process {pid} still running after {timeout:.1f}s")
+    print(f"Process {pid} still running after {timeout:.1f}s")
 
 
 def demo(images_dir: Path, python: str, cleanup: bool) -> None:
-    _println(f"Using images directory {images_dir}")
+    print(f"Using images directory {images_dir}")
     images_dir.mkdir(parents=True, exist_ok=True)
 
     proc = _launch_goblin(python)
     assert proc.stdin and proc.stdout
 
     _write_line(proc.stdin, "hello before freeze")
-    _println(f"Original response: {_read_line(proc.stdout)}")
+    print(f"Original response: {_read_line(proc.stdout)}")
 
     log_path = goblins.freeze(proc.pid, images_dir, leave_running=True, verbosity=4, shell_job=False)
-    _println(f"Goblin frozen into {images_dir} (log {log_path})")
+    print(f"Goblin frozen into {images_dir} (log {log_path})")
 
-    thawed = goblins.thaw(images_dir, shell_job=False)
-    _println(
+    thawed = goblins.thaw(images_dir, shell_job=False, detach=True)
+    print(
         f"Thawed goblin PID={thawed.pid} (original PID={proc.pid}, restore helper PID={thawed.restore_pid})"
     )
 
     _write_line(proc.stdin, "original still alive")
-    _println(f"Original response: {_read_line(proc.stdout)}")
+    print(f"Original response: {_read_line(proc.stdout)}")
 
     _write_line(thawed.stdin, "hello from thawed client")
-    _println(f"Thawed response: {_read_line(thawed.stdout)}")
+    print(f"Thawed response: {_read_line(thawed.stdout)}")
 
     _write_line(proc.stdin, "orig second ping")
     _write_line(thawed.stdin, "thawed second ping")
-    _println(f"Original second response: {_read_line(proc.stdout)}")
-    _println(f"Thawed second response: {_read_line(thawed.stdout)}")
+    print(f"Original second response: {_read_line(proc.stdout)}")
+    print(f"Thawed second response: {_read_line(thawed.stdout)}")
 
     proc.stdin.close()
     thawed.stdin.close()
 
     try:
-        _println(f"Original exit message: {_read_line(proc.stdout, timeout=2)}")
+        print(f"Original exit message: {_read_line(proc.stdout, timeout=2)}")
     except TimeoutError:
-        _println("Original goblin did not exit on cue")
+        print("Original goblin did not exit on cue")
     try:
-        _println(f"Thawed exit message: {_read_line(thawed.stdout, timeout=2)}")
+        print(f"Thawed exit message: {_read_line(thawed.stdout, timeout=2)}")
     except TimeoutError:
-        _println("Thawed goblin did not exit on cue")
+        print("Thawed goblin did not exit on cue")
 
     thawed.close()
     if thawed.restore_pid is not None:
-        _println(f"Waiting for criu-ns helper PID {thawed.restore_pid} to exit")
+        print(f"Waiting for criu-ns helper PID {thawed.restore_pid} to exit")
         _wait_for_pid(thawed.restore_pid, timeout=5)
     proc.wait(timeout=5)
     _drain(proc.stderr)
-    _println("Demo complete.")
+    print("Demo complete.")
 
     if cleanup:
-        _println(f"Removing {images_dir}")
-        shutil.rmtree(images_dir, ignore_errors=True)
+        print(f"Removing {images_dir}")
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Synchronous goblin freeze/thaw sanity test.", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description="Synchronous goblin freeze/thaw sanity test.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     parser.add_argument(
         "--images-dir",
         type=Path,

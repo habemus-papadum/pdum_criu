@@ -101,8 +101,10 @@ def freeze(
     result = subprocess.run(
         context.command,
         check=False,
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        start_new_session=True,
     )
     _ensure_log_readable(context.log_path)
     _handle_freeze_result(result.returncode, context.log_path)
@@ -139,8 +141,10 @@ async def freeze_async(
 
     process = await asyncio.create_subprocess_exec(
         *context.command,
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
+        start_new_session=True,
     )
     returncode = await process.wait()
     _ensure_log_readable(context.log_path)
@@ -196,10 +200,19 @@ def thaw(
     extra_args: Iterable[str] | None = None,
     pidfile_timeout: float = 30.0,
     shell_job: bool = True,
+    detach: bool = False,
 ) -> GoblinProcess:
     """Restore a goblin synchronously and return file objects for stdio."""
 
-    context = _build_thaw_context(images_dir, extra_args=extra_args, shell_job=shell_job)
+    if shell_job and detach:
+        raise ValueError("detach=True is incompatible with shell_job=True.")
+
+    context = _build_thaw_context(
+        images_dir,
+        extra_args=extra_args,
+        shell_job=shell_job,
+        detach=detach,
+    )
     pipes = _prepare_stdio_pipes(context.pipe_ids)
 
     restore_proc = _launch_criu_restore_sync(context, pipes)
@@ -229,10 +242,19 @@ async def thaw_async(
     extra_args: Iterable[str] | None = None,
     pidfile_timeout: float = 30.0,
     shell_job: bool = True,
+    detach: bool = False,
 ) -> AsyncGoblinProcess:
     """Restore a goblin and expose asyncio streams."""
 
-    context = _build_thaw_context(images_dir, extra_args=extra_args, shell_job=shell_job)
+    if shell_job and detach:
+        raise ValueError("detach=True is incompatible with shell_job=True.")
+
+    context = _build_thaw_context(
+        images_dir,
+        extra_args=extra_args,
+        shell_job=shell_job,
+        detach=detach,
+    )
     pipes = _prepare_stdio_pipes(context.pipe_ids)
 
     restore_proc = await _launch_criu_restore_async(context, pipes)
@@ -264,6 +286,7 @@ def _build_thaw_context(
     *,
     extra_args: Iterable[str] | None,
     shell_job: bool,
+    detach: bool,
 ) -> _ThawContext:
     images = Path(images_dir).expanduser().resolve()
     if not images.exists():
@@ -299,6 +322,8 @@ def _build_thaw_context(
     ]
     if shell_job:
         command.append("--shell-job")
+    if detach:
+        command.append("-d")
 
     if extra_args:
         command.extend(extra_args)
@@ -620,8 +645,10 @@ def _launch_criu_restore_sync(context: _ThawContext, pipes: _StdioPipes) -> subp
         proc = subprocess.Popen(
             command,
             pass_fds=child_fds,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            start_new_session=True,
         )
     except Exception:
         pipes.close_parent_ends()
@@ -644,8 +671,10 @@ async def _launch_criu_restore_async(
         proc = await asyncio.create_subprocess_exec(
             *command,
             pass_fds=child_fds,
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
+            start_new_session=True,
         )
     except Exception:
         pipes.close_parent_ends()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 from pathlib import Path
@@ -43,6 +44,7 @@ def test_freeze_success(monkeypatch, tmp_path: Path) -> None:
     assert log_path.name.startswith("goblin-freeze.1234")
     assert "/usr/bin/criu" in recorded_command["cmd"]
     assert "--leave-running" not in recorded_command["cmd"]
+    assert "--shell-job" in recorded_command["cmd"]
     assert recorded_command["check"] is False
 
     meta_path = tmp_path / ".pdum_goblin_meta.json"
@@ -126,10 +128,41 @@ def test_thaw_success(monkeypatch, tmp_path: Path) -> None:
     proc = goblins.thaw(images_dir)
 
     assert proc.pid == 7777
+    assert "--shell-job" in called["cmd"]
     assert any("--inherit-fd" in arg for arg in called["cmd"] if isinstance(arg, str))
     proc.stdin.close()
     proc.stdout.close()
     proc.stderr.close()
+
+
+def test_thaw_pidfile_timeout_override(monkeypatch, tmp_path: Path) -> None:
+    images_dir = tmp_path / "img"
+    images_dir.mkdir()
+    _write_meta(images_dir)
+
+    monkeypatch.setattr(goblins.utils, "resolve_command", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(goblins.utils, "ensure_criu", lambda **_: "/usr/bin/criu")
+    monkeypatch.setattr(goblins.utils, "ensure_criu_ns", lambda **_: "/usr/sbin/criu-ns")
+    monkeypatch.setattr(goblins, "_prepare_stdio_pipes", lambda pipe_ids: SimpleNamespace(
+        child_stdio_fds=[],
+        inherit_args=[],
+        close_parent_ends=lambda: None,
+        close_child_fds=lambda: None,
+        build_sync_streams=lambda: (io.BytesIO(), io.BytesIO(), io.BytesIO()),
+    ))
+    monkeypatch.setattr(goblins.utils, "ensure_sudo_closefrom", lambda: True)
+    monkeypatch.setattr(goblins.subprocess, "run", lambda *_, **__: DummyRun(0))
+
+    recorded = {}
+
+    def fake_wait(pidfile, timeout):
+        recorded["timeout"] = timeout
+        return 9999
+
+    monkeypatch.setattr(goblins, "_wait_for_pidfile", fake_wait)
+    proc = goblins.thaw(images_dir, pidfile_timeout=42.5)
+    assert proc.pid == 9999
+    assert recorded["timeout"] == 42.5
 
 
 def test_thaw_async_success(monkeypatch, tmp_path: Path) -> None:

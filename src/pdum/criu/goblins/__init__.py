@@ -176,6 +176,7 @@ def thaw(
     images_dir: str | Path,
     *,
     extra_args: Iterable[str] | None = None,
+    pidfile_timeout: float = 30.0,
 ) -> GoblinProcess:
     """Restore a goblin synchronously and return file objects for stdio."""
 
@@ -184,7 +185,7 @@ def thaw(
 
     try:
         _run_criu_restore(context, pipes)
-        pid = _wait_for_pidfile(context.pidfile)
+        pid = _wait_for_pidfile(context.pidfile, timeout=pidfile_timeout)
     except Exception:
         pipes.close_parent_ends()
         raise
@@ -204,6 +205,7 @@ async def thaw_async(
     images_dir: str | Path,
     *,
     extra_args: Iterable[str] | None = None,
+    pidfile_timeout: float = 30.0,
 ) -> AsyncGoblinProcess:
     """Restore a goblin and expose asyncio streams."""
 
@@ -212,7 +214,7 @@ async def thaw_async(
 
     try:
         _run_criu_restore(context, pipes)
-        pid = _wait_for_pidfile(context.pidfile)
+        pid = _wait_for_pidfile(context.pidfile, timeout=pidfile_timeout)
     except Exception:
         pipes.close_parent_ends()
         raise
@@ -264,6 +266,7 @@ def _build_thaw_context(images_dir: str | Path, *, extra_args: Iterable[str] | N
         str(log_path),
         "--pidfile",
         str(pidfile),
+        "--shell-job",
     ]
 
     if extra_args:
@@ -345,6 +348,7 @@ def _build_freeze_context(
         "-o",
         str(resolved_log),
         f"-v{verbosity}",
+        "--shell-job",
     ]
 
     if leave_running:

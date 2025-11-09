@@ -150,7 +150,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--images-dir",
         type=Path,
-        help="Directory to store CRIU images (default: temporary directory).",
+        default=Path("/tmp/pdum-goblin-demo"),
+        help="Directory to store CRIU images (default: /tmp/pdum-goblin-demo).",
     )
     parser.add_argument(
         "--python",
@@ -168,13 +169,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     _configure_logging()
     args = parse_args()
-    if args.images_dir:
-        images_dir = args.images_dir.expanduser().resolve()
-        cleanup = args.cleanup
-    else:
-        images_dir = Path(tempfile.mkdtemp(prefix="goblin-demo-"))
-        cleanup = args.cleanup
-        logging.info("Created temporary images dir %s", images_dir)
+    images_dir = args.images_dir.expanduser().resolve()
+    cleanup = args.cleanup
     demo(images_dir, args.python, cleanup)
 
 

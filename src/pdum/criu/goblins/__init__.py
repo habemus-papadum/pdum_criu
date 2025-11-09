@@ -90,9 +90,6 @@ def freeze(
 
     logger.info("Freezing goblin pid %s into %s", pid, images_dir)
 
-    if pid <= 0:
-        raise ValueError("PID must be a positive integer")
-
     context = _build_freeze_context(
         pid,
         images_dir,

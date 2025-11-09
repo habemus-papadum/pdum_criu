@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import select
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -154,3 +156,82 @@ def _spawn_echo_goblin() -> subprocess.Popen[bytes]:
     proc.stdout.readline()
     time.sleep(0.2)
     return proc
+
+
+def _read_line(file, timeout: float = 5.0) -> bytes:
+    start = time.time()
+    while True:
+        if file.closed:
+            return b""
+        ready, _, _ = select.select([file], [], [], max(0.0, start + timeout - time.time()))
+        if not ready:
+            raise TimeoutError("timed out waiting for goblin output")
+        line = file.readline()
+        if line:
+            return line
+
+
+def _wait_for_pid_exit(pid: int, timeout: float = 5.0) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not Path(f"/proc/{pid}").exists():
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"process {pid} still alive after {timeout}s")
+
+
+@pytest.mark.criu_live
+def test_goblin_thaw_sync_live(tmp_path: Path) -> None:
+    _require_live_prereqs()
+
+    proc = _spawn_echo_goblin()
+    with _images_dir(tmp_path, "thaw-sync") as images_dir:
+        try:
+            goblins.freeze(proc.pid, images_dir, leave_running=False, shell_job=False)
+        except RuntimeError as exc:
+            log_tail = _read_log_tail_as_root(images_dir / f"goblin-freeze.{proc.pid}.log")
+            pytest.skip(f"CRIU freeze failed: {exc}\nLog tail:\n{log_tail}")
+
+        proc.wait(timeout=5)
+
+        thawed = goblins.thaw(images_dir, shell_job=False, detach=True)
+        assert thawed.stdin and thawed.stdout
+        thawed.stdin.write(b"ping sync\n")
+        thawed.stdin.flush()
+        response = _read_line(thawed.stdout)
+        assert b"PING SYNC" in response.upper()
+
+        thawed.stdin.write(b"exit\n")
+        thawed.stdin.flush()
+        thawed.close()
+        if thawed.helper_pid is not None:
+            os.kill(thawed.helper_pid, signal.SIGTERM)
+            _wait_for_pid_exit(thawed.helper_pid, timeout=10)
+
+
+@pytest.mark.criu_live
+def test_pipe_ids_from_images_live(tmp_path: Path) -> None:
+    _require_live_prereqs()
+    if shutil.which("crit") is None:
+        pytest.skip("crit utility not installed")
+
+    proc = _spawn_echo_goblin()
+    with _images_dir(tmp_path, "pipe-ids") as images_dir:
+        try:
+            goblins.freeze(proc.pid, images_dir, leave_running=False, shell_job=False)
+        except RuntimeError as exc:
+            log_tail = _read_log_tail_as_root(images_dir / f"goblin-freeze.{proc.pid}.log")
+            pytest.skip(f"CRIU freeze failed: {exc}\nLog tail:\n{log_tail}")
+
+        proc.wait(timeout=5)
+        meta = images_dir / ".pdum_goblin_meta.json"
+        if meta.exists():
+            meta.unlink()
+
+        try:
+            pipe_ids = goblins._pipe_ids_from_images(images_dir)
+        except RuntimeError as exc:
+            pytest.skip(f"crit parsing failed: {exc}")
+        assert set(pipe_ids) == {"stdin", "stdout", "stderr"}
+        for value in pipe_ids.values():
+            assert value.startswith("pipe:[")

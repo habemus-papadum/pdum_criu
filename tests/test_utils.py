@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
+import sys
+import time
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +21,15 @@ def _make_executable(directory: Path, name: str, contents: str) -> Path:
     path.write_text(contents, encoding="utf-8")
     path.chmod(0o755)
     return path
+
+
+def _spawn_marker_process(label: str) -> subprocess.Popen[bytes]:
+    script = (
+        "import time\n"
+        f"label = '{label}'\n"
+        "time.sleep(30)\n"
+    )
+    return subprocess.Popen([sys.executable, "-u", "-c", script], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
 def test_resolve_command_returns_absolute_path() -> None:
@@ -196,3 +210,57 @@ def test_psgrep_rejects_empty_query() -> None:
     """Empty queries should be rejected early."""
     with pytest.raises(ValueError):
         utils.psgrep("")
+
+
+@pytest.mark.skipif(shutil.which("pgrep") is None, reason="pgrep not installed")
+def test_psgrep_real_process(tmp_path: Path) -> None:
+    label = f"psgrep-{uuid.uuid4().hex}"
+    proc = _spawn_marker_process(label)
+    try:
+        pid = utils.psgrep(label)
+        assert pid == proc.pid
+        resolved = utils.resolve_target_pid(None, label)
+        assert resolved == proc.pid
+    finally:
+        proc.terminate()
+        proc.wait(timeout=2)
+
+
+def test_tail_file_roundtrip(tmp_path: Path) -> None:
+    log_path = tmp_path / "tail.log"
+    log_path.write_text("one\ntwo\nthree\n", encoding="utf-8")
+    assert utils.tail_file(log_path, lines=2) == "two\nthree"
+    assert utils.tail_file(tmp_path / "missing.log") == ""
+
+
+def test_spawn_directory_cleanup(tmp_path: Path) -> None:
+    target = tmp_path / "artifact"
+    target.mkdir()
+    watcher = subprocess.Popen([sys.executable, "-u", "-c", "import time; time.sleep(0.5)"])
+    utils.spawn_directory_cleanup(target, watcher.pid)
+    watcher.wait(timeout=2)
+    deadline = time.time() + 5
+    while time.time() < deadline and target.exists():
+        time.sleep(0.1)
+    assert not target.exists()
+
+
+def _reset_sudo_closefrom_cache() -> None:
+    utils._SUDO_CLOSEFROM_SUPPORTED = None
+    utils._SUDO_CLOSEFROM_ERROR = None
+
+
+def test_ensure_sudo_closefrom_with_override_success(monkeypatch, tmp_path: Path) -> None:
+    script = _make_executable(tmp_path, "sudo-success.sh", "#!/usr/bin/env bash\nexit 0\n")
+    monkeypatch.setenv("PDUM_CRIU_SUDO", os.fspath(script))
+    _reset_sudo_closefrom_cache()
+    utils.ensure_sudo_closefrom()
+    assert utils._SUDO_CLOSEFROM_SUPPORTED is True
+
+
+def test_ensure_sudo_closefrom_with_override_failure(monkeypatch, tmp_path: Path) -> None:
+    script = _make_executable(tmp_path, "sudo-fail.sh", "#!/usr/bin/env bash\necho 'denied' >&2\nexit 1\n")
+    monkeypatch.setenv("PDUM_CRIU_SUDO", os.fspath(script))
+    _reset_sudo_closefrom_cache()
+    with pytest.raises(RuntimeError):
+        utils.ensure_sudo_closefrom()

@@ -608,7 +608,12 @@ def _launch_criu_restore_sync(context: _ThawContext, pipes: _StdioPipes) -> subp
     command = _build_restore_command_with_inherit(context, pipes)
     child_fds = pipes.child_stdio_fds
     try:
-        proc = subprocess.Popen(command, pass_fds=child_fds)
+        proc = subprocess.Popen(
+            command,
+            pass_fds=child_fds,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
     except Exception:
         pipes.close_parent_ends()
         pipes.close_child_fds()
@@ -627,7 +632,12 @@ async def _launch_criu_restore_async(
     command = _build_restore_command_with_inherit(context, pipes)
     child_fds = pipes.child_stdio_fds
     try:
-        proc = await asyncio.create_subprocess_exec(*command, pass_fds=child_fds)
+        proc = await asyncio.create_subprocess_exec(
+            *command,
+            pass_fds=child_fds,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
     except Exception:
         pipes.close_parent_ends()
         pipes.close_child_fds()

@@ -15,6 +15,10 @@ from pathlib import Path
 
 from pdum.criu import goblins
 
+import pdum.criu
+
+print("pdum.criu loaded from", pdum.criu.__file__)
+
 GOBLIN_PAYLOAD = r"""
 import os
 import sys
@@ -37,6 +41,12 @@ def _write_line(writer, text: str) -> None:
     data = (text.rstrip("\n") + "\n").encode("utf-8")
     writer.write(data)
     writer.flush()
+
+
+def _println(message: str) -> None:
+    prefix = "\r" if sys.stdout.isatty() else ""
+    sys.stdout.write(prefix + message + "\n")
+    sys.stdout.flush()
 
 
 def _read_line(reader, *, timeout: float = 5.0) -> str:
@@ -66,7 +76,7 @@ def _drain(reader) -> None:
         chunk = reader.readline()
         if not chunk:
             break
-        print(f"[stderr] {chunk.decode('utf-8', errors='replace').rstrip()}")
+        _println(f"[stderr] {chunk.decode('utf-8', errors='replace').rstrip()}")
 
 
 def _launch_goblin(python: str) -> subprocess.Popen[bytes]:
@@ -80,7 +90,7 @@ def _launch_goblin(python: str) -> subprocess.Popen[bytes]:
     if proc.stdout is None or proc.stdin is None or proc.stderr is None:
         raise RuntimeError("failed to capture goblin stdio pipes")
     banner = _read_line(proc.stdout)
-    print(f"Original goblin says: {banner}")
+    _println(f"Original goblin says: {banner}")
     return proc
 
 
@@ -97,54 +107,56 @@ def _wait_for_pid(pid: int, timeout: float) -> None:
 
 
 def demo(images_dir: Path, python: str, cleanup: bool) -> None:
-    print(f"Using images directory {images_dir}")
+    _println(f"Using images directory {images_dir}")
     images_dir.mkdir(parents=True, exist_ok=True)
 
     proc = _launch_goblin(python)
     assert proc.stdin and proc.stdout
 
     _write_line(proc.stdin, "hello before freeze")
-    print(f"Original response: {_read_line(proc.stdout)}")
+    _println(f"Original response: {_read_line(proc.stdout)}")
 
     log_path = goblins.freeze(proc.pid, images_dir, leave_running=True, verbosity=4, shell_job=False)
-    print(f"Goblin frozen into {images_dir} (log {log_path})")
+    _println(f"Goblin frozen into {images_dir} (log {log_path})")
 
     thawed = goblins.thaw(images_dir, shell_job=False)
-    print(f"Thawed goblin PID={thawed.pid} (original PID={proc.pid}, restore helper PID={thawed.restore_pid})")
+    _println(
+        f"Thawed goblin PID={thawed.pid} (original PID={proc.pid}, restore helper PID={thawed.restore_pid})"
+    )
 
     _write_line(proc.stdin, "original still alive")
-    print(f"Original response: {_read_line(proc.stdout)}")
+    _println(f"Original response: {_read_line(proc.stdout)}")
 
     _write_line(thawed.stdin, "hello from thawed client")
-    print(f"Thawed response: {_read_line(thawed.stdout)}")
+    _println(f"Thawed response: {_read_line(thawed.stdout)}")
 
     _write_line(proc.stdin, "orig second ping")
     _write_line(thawed.stdin, "thawed second ping")
-    print(f"Original second response: {_read_line(proc.stdout)}")
-    print(f"Thawed second response: {_read_line(thawed.stdout)}")
+    _println(f"Original second response: {_read_line(proc.stdout)}")
+    _println(f"Thawed second response: {_read_line(thawed.stdout)}")
 
     proc.stdin.close()
     thawed.stdin.close()
 
     try:
-        print(f"Original exit message: {_read_line(proc.stdout, timeout=2)}")
+        _println(f"Original exit message: {_read_line(proc.stdout, timeout=2)}")
     except TimeoutError:
-        print("Original goblin did not exit on cue")
+        _println("Original goblin did not exit on cue")
     try:
-        print(f"Thawed exit message: {_read_line(thawed.stdout, timeout=2)}")
+        _println(f"Thawed exit message: {_read_line(thawed.stdout, timeout=2)}")
     except TimeoutError:
-        print("Thawed goblin did not exit on cue")
+        _println("Thawed goblin did not exit on cue")
 
     thawed.close()
     if thawed.restore_pid is not None:
-        print(f"Waiting for criu-ns helper PID {thawed.restore_pid} to exit")
+        _println(f"Waiting for criu-ns helper PID {thawed.restore_pid} to exit")
         _wait_for_pid(thawed.restore_pid, timeout=5)
     proc.wait(timeout=5)
     _drain(proc.stderr)
-    print("Demo complete.")
+    _println("Demo complete.")
 
     if cleanup:
-        print(f"Removing {images_dir}")
+        _println(f"Removing {images_dir}")
         shutil.rmtree(images_dir, ignore_errors=True)
 
 

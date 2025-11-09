@@ -155,7 +155,7 @@ def test_thaw_success(monkeypatch, tmp_path: Path) -> None:
         def kill(self):
             self._returncode = -9
 
-    def fake_popen(cmd, pass_fds):
+    def fake_popen(cmd, pass_fds, **kwargs):
         called["cmd"] = cmd
         called["pass_fds"] = pass_fds
         pidfile = images_dir / "goblin-thaw.12345.pid"
@@ -227,7 +227,7 @@ def test_thaw_without_shell_job(monkeypatch, tmp_path: Path) -> None:
 
     captured = {}
 
-    def fake_popen(cmd, pass_fds):
+    def fake_popen(cmd, pass_fds, **kwargs):
         captured["cmd"] = cmd
         (images_dir / "goblin-thaw.999.pid").write_text("6500")
         return FakeProc()

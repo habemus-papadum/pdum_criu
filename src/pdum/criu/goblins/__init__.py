@@ -98,7 +98,12 @@ def freeze(
 
     logger.debug("Running command: %s", shlex.join(context.command))
 
-    result = subprocess.run(context.command, check=False)
+    result = subprocess.run(
+        context.command,
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     _ensure_log_readable(context.log_path)
     _handle_freeze_result(result.returncode, context.log_path)
 
@@ -132,7 +137,11 @@ async def freeze_async(
 
     logger.debug("Running command (async): %s", shlex.join(context.command))
 
-    process = await asyncio.create_subprocess_exec(*context.command)
+    process = await asyncio.create_subprocess_exec(
+        *context.command,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
     returncode = await process.wait()
     _ensure_log_readable(context.log_path)
     _handle_freeze_result(returncode, context.log_path)

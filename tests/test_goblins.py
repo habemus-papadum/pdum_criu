@@ -32,7 +32,7 @@ def test_freeze_success(monkeypatch, tmp_path: Path) -> None:
 
     recorded_command = {}
 
-    def fake_run(cmd, check):
+    def fake_run(cmd, check, **kwargs):
         recorded_command["cmd"] = cmd
         recorded_command["check"] = check
         return DummyRun(0)
@@ -64,7 +64,7 @@ def test_freeze_without_shell_job(monkeypatch, tmp_path: Path) -> None:
 
     recorded = {}
 
-    def fake_run(cmd, check):
+    def fake_run(cmd, check, **kwargs):
         recorded["cmd"] = cmd
         return DummyRun(0)
 
@@ -94,7 +94,7 @@ def test_freeze_async_success(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(goblins.utils, "resolve_command", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(goblins.utils, "tail_file", lambda *_args, **_kwargs: "")
 
-    async def fake_create_subprocess_exec(*cmd):  # pragma: no cover - simple helper
+    async def fake_create_subprocess_exec(*cmd, **kwargs):  # pragma: no cover - simple helper
         class _Proc:
             async def wait(self) -> int:
                 return 0

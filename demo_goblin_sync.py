@@ -15,10 +15,6 @@ from pathlib import Path
 
 from pdum.criu import goblins
 
-import pdum.criu
-
-print("pdum.criu loaded from", pdum.criu.__file__)
-
 GOBLIN_PAYLOAD = r"""
 import os
 import sys
@@ -100,10 +96,10 @@ def _wait_for_pid(pid: int, timeout: float) -> None:
         try:
             os.kill(pid, 0)
         except OSError:
-            print(f"Process {pid} exited")
+            _println(f"Process {pid} exited")
             return
         time.sleep(0.1)
-    print(f"Process {pid} still running after {timeout:.1f}s")
+    _println(f"Process {pid} still running after {timeout:.1f}s")
 
 
 def demo(images_dir: Path, python: str, cleanup: bool) -> None:

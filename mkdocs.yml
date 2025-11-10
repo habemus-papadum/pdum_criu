@@ -13,6 +13,7 @@ theme:
 nav:
   - Home: index.md
   - Goblins Demo: goblins.ipynb
+  - Freeze-Thaw-Freeze: freeze-thaw-freeze.md
   - API: reference.md
 
 # If you'd like to specify a separate docs directory, you can do so here

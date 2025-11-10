@@ -11,11 +11,13 @@ python demos/goblin_freeze_thaw_freeze.py --images-dir /tmp/pdum-freeze-thaw-fre
 ```
 Attempting to freeze the restored goblin (expected to fail)...
 Second freeze failed as expected: CRIU dump failed with exit code 1
-Tail of /tmp/pdum-freeze-thaw-freeze/second-freeze/second-freeze.12345.log:
-    1: Error (criu/mount.c:1212): mnt: Can't dump that as parent 62 is missing
-    2: Error (criu/mount.c:1896): Dumping FAILED.
+Tail of /tmp/pdum-freeze-thaw-freeze/second-freeze/second-freeze.<pid>.log:
+    (00.002961) mnt: Inspecting sharing on 920 shared_id 0 master_id 0 (@./proc)
+    (00.002962) mnt: Inspecting sharing on 919 shared_id 0 master_id 30 (@./boot/efi)
+    (00.002964) Error (criu/mount.c:1088): mnt: Mount 919 ./boot/efi (master_id: 30 shared_id: 0) has unreachable sharing. Try --enable-external-masters.
+    (00.003033) Error (criu/cr-dump.c:2111): Dumping FAILED.
 ```
-CRIU emits `mnt: Can't dump that as parent … is missing` (or similar) whenever it walks the restored `/proc/<pid>/mountinfo` tree and cannot find the mount that should act as the parent for one of the bind mounts created during restore.
+CRIU walks the restored `/proc/<pid>/mountinfo` tree and reports `unreachable sharing` because the restored namespace references mount masters that only exist inside the helper-owned namespace; the host-side dumper does not see those masters and aborts.
 
 ## Mount snapshot (host)
 ```
@@ -30,11 +32,11 @@ cgroup2 on /sys/fs/cgroup type cgroup2 (rw,nosuid,nodev,noexec,relatime)
 /dev/nvme0n1p1 on /boot/efi type vfat (rw,relatime,fmask=0022,dmask=0022,codepage=437,iocharset=iso8859-1,shortname=mixed,errors=remount-ro)
 tmpfs on /run/user/1000 type tmpfs (rw,nosuid,nodev,relatime,size=12551372k,nr_inodes=3137843,mode=700,uid=1000,gid=1000,inode64)
 ```
-Mount namespaces restored by CRIU inherit bind mounts created by `criu-ns` rather than mounts that live directly under this host table, which is why the second dump complains about “parent missing.”
+Mount namespaces restored by CRIU inherit bind mounts created by `criu-ns` rather than mounts that live directly under this host table, which is why the second dump reports unreachable parent/master mounts.
 
 ## Failure mechanics
-- First freeze captures a consistent `mountinfo` tree whose parent/child IDs refer to the host mounts shown above; these IDs are recorded in the image metadata.
-- Restore uses `criu-ns` to spin up a detached mount namespace and reconstruct the tree, but many bind mounts now hang off ephemeral parents (e.g., tmpfs roots or `nsfs` bind points) that do not have counterparts on the host.
-- After thaw, the goblin lives entirely inside that detached namespace; when `criu dump` runs again from the host namespace it inspects `/proc/<pid>/mountinfo`, sees parent IDs that point to helper-created mounts, and cannot map them back to any mount it knows how to dump.
-- The dump helper bails out with `mnt: Can't dump that as parent … is missing`, which matches the tail printed by the demo and leaves the second image directory empty.
-- Because the issue stems from unparented mounts, the only reliable workaround today is to avoid the freeze → thaw → freeze workflow until CRIU grows support for capturing and reparenting those helper mounts.
+- First freeze captures a consistent `mountinfo` tree whose parent/child IDs refer to the host mounts shown above; these IDs plus master IDs are recorded in the images.
+- Restore uses `criu-ns` to spin up a detached mount namespace and reconstruct the tree, but many bind mounts now hang off helper-owned parents or master mount points (e.g., temporary tmpfs or `nsfs` bind targets) that do not exist on the host anymore.
+- After thaw, the goblin lives inside that detached namespace; when `criu dump` runs again from the host namespace it inspects `/proc/<pid>/mountinfo`, sees parent/master IDs that point to helper-created mounts, and cannot map them back to any mount it controls.
+- The dump helper therefore emits `Mount <id> <path> (master_id: N …) has unreachable sharing. Try --enable-external-masters.` before aborting, which matches the tail printed by the demo and leaves the second image directory empty.
+- Because the issue stems from unparented/unreachable mount masters, the only reliable workaround today is to avoid the freeze → thaw → freeze workflow until CRIU grows support for capturing and reparenting those helper mounts.

@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import argparse
 import select
 import subprocess
 import sys
@@ -12,19 +11,19 @@ from pathlib import Path
 
 from pdum.criu import goblins
 
-PAYLOAD_TEXT = '{"cmd": "import Mathlib\nopen BigOperators\nopen Real\nopen Nat"}\n\n'
-PRIME_COMMAND = '{"cmd": "def f := 37"}\n\n'
+EXECUTABLE = ["lake", "env", str(Path("/home/nehal/src/lean4-llm/blog/repl/.lake/build/bin/repl"))]
+WORKDIR = Path("/home/nehal/src/lean4-llm/blog/repl/test/Mathlib")
+IMAGES_DIR = Path("/tmp/time-demo-image")
+PAYLOAD_TEXT = '{"cmd": "def f := 37"}\n\n'
+PRIME_COMMAND = '{"cmd": "import Mathlib\nopen BigOperators\nopen Real\nopen Nat"}\n\n'
 READ_TIMEOUT = 10.0
 PRIME_TIMEOUT = 5.0
-DEFAULT_PROCESS_NAME = "placeholder-goblin"
-DEFAULT_EXECUTABLE = Path("/home/nehal/src/lean4-llm/blog/repl/.lake/build/bin/repl")
-DEFAULT_WORKDIR = Path("/home/nehal/src/lean4-llm/blog/repl/test/Mathlib")
 
 
 def _write_line(writer, text: str) -> None:
     """Write a UTF-8 line to the goblin stdin."""
 
-    data = (text.rstrip("\n") + "\n").encode("utf-8")
+    data = (text.rstrip("\n") + "\n\n").encode("utf-8")
     writer.write(data)
     writer.flush()
 
@@ -63,18 +62,19 @@ def _read_line(reader, *, timeout: float) -> str:
         if not ready:
             continue
         chunk = reader.readline()
+        print(f"Read {len(chunk)} bytes from goblin stdout")
         if not chunk:
             raise RuntimeError("goblin stdout closed before an empty line was seen")
         return chunk.decode("utf-8", errors="replace").rstrip("\n")
 
 
-def _launch_process(name: str, executable: Path, workdir: Path) -> subprocess.Popen[bytes]:
+def _launch_process(executable: Path, workdir: Path) -> subprocess.Popen[bytes]:
     """Launch the target process with pipe-based stdio."""
 
-    cmd = [str(executable)]
-    print(f"Launching {name} via {cmd} (cwd={workdir})")
+    
+    print(f"Launching {EXECUTABLE} (cwd={workdir})")
     proc = subprocess.Popen(
-        cmd,
+        EXECUTABLE,
         cwd=str(workdir),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
@@ -101,13 +101,13 @@ def _prime_process(proc: subprocess.Popen[bytes], command: str) -> str:
     return "\n".join(lines)
 
 
-def _freeze_process(proc: subprocess.Popen[bytes], images_dir: Path) -> Path:
+def _freeze_process(proc: subprocess.Popen[bytes]) -> Path:
     """Freeze the launched process into the requested images directory."""
 
-    print(f"Freezing PID {proc.pid} into {images_dir}")
+    print(f"Freezing PID {proc.pid} into {IMAGES_DIR}")
     log_path = goblins.freeze(
         proc.pid,
-        images_dir,
+        IMAGES_DIR,
         leave_running=False,
         shell_job=True,
     )
@@ -136,18 +136,23 @@ def _cleanup_process(proc: subprocess.Popen[bytes]) -> None:
 
 
 def prepare_images(
-    process_name: str,
     executable: Path,
     workdir: Path,
-    images_dir: Path,
     command: str,
-) -> Path:
+) -> tuple[Path, float, float]:
     """Launch the target, issue a command, and freeze its state."""
 
-    proc = _launch_process(process_name, executable, workdir)
+    start_launch = time.perf_counter()
+    proc = _launch_process(executable, workdir)
     try:
         _prime_process(proc, command)
-        return _freeze_process(proc, images_dir)
+        prime_done = time.perf_counter()
+        launch_prime_elapsed = prime_done - start_launch
+
+        freeze_start = time.perf_counter()
+        log_path = _freeze_process(proc)
+        freeze_elapsed = time.perf_counter() - freeze_start
+        return log_path, launch_prime_elapsed, freeze_elapsed
     finally:
         _cleanup_process(proc)
 
@@ -181,6 +186,7 @@ def measure_thaw(images_dir: Path, message: str, *, timeout: float) -> float:
     start = time.perf_counter()
     goblin = goblins.thaw(images_dir, shell_job=True)
     try:
+        print(f"Sending thaw payload: {message!r}")
         _write_line(goblin.stdin, message)
         while True:
             line = _read_line(goblin.stdout, timeout=timeout)
@@ -192,40 +198,10 @@ def measure_thaw(images_dir: Path, message: str, *, timeout: float) -> float:
     return time.perf_counter() - start
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Launch a goblin, freeze it, then measure thaw timing."
-    )
-    parser.add_argument(
-        "--process-name",
-        default=DEFAULT_PROCESS_NAME,
-        help="Logical name used for status messages.",
-    )
-    parser.add_argument(
-        "--executable",
-        type=Path,
-        default=DEFAULT_EXECUTABLE,
-        help="Path to the executable to launch (placeholder by default).",
-    )
-    parser.add_argument(
-        "--workdir",
-        type=Path,
-        default=DEFAULT_WORKDIR,
-        help="Working directory for the launched process.",
-    )
-    parser.add_argument(
-        "images_dir",
-        type=Path,
-        help="Directory that will store the CRIU image set.",
-    )
-    return parser.parse_args()
-
-
 def main() -> None:
-    args = parse_args()
-    images_dir = args.images_dir.expanduser().resolve()
-    executable = args.executable.expanduser().resolve()
-    workdir = args.workdir.expanduser().resolve()
+    images_dir = IMAGES_DIR
+    executable = EXECUTABLE
+    workdir = WORKDIR.expanduser().resolve()
 
     try:
         images_dir.mkdir(parents=True, exist_ok=True)
@@ -235,21 +211,17 @@ def main() -> None:
 
     print(f"Preparing goblin checkpoint in {images_dir}")
     try:
-        prepare_images(
-            args.process_name,
-            executable,
-            workdir,
-            images_dir,
-            PRIME_COMMAND,
-        )
+        log_path, launch_prime_elapsed, freeze_elapsed = prepare_images(executable, workdir, PRIME_COMMAND)
+        print(f"Startup + prime elapsed: {launch_prime_elapsed:.3f}s")
+        print(f"Freeze log written to {log_path}")
+        print(f"Freeze duration: {freeze_elapsed:.3f}s")
+
         print(f"Thawing goblin from {images_dir}")
-        elapsed = measure_thaw(images_dir, PAYLOAD_TEXT, timeout=READ_TIMEOUT)
+        thaw_elapsed = measure_thaw(images_dir, PAYLOAD_TEXT, timeout=READ_TIMEOUT)
+        print(f"Thaw + response elapsed: {thaw_elapsed:.3f}s")
     except Exception as exc:  # pragma: no cover - demo CLI
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
-
-    print(f"Elapsed time: {elapsed:.3f}s")
-
 
 if __name__ == "__main__":
     main()
